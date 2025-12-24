@@ -1,0 +1,12 @@
+# virtual environment
+cardiovascular-env/
+env/
+venv/
+.venv/
+
+# env file
+.env
+.env.*
+
+# python cache
+__pycache__/
