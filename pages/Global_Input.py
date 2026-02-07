@@ -2,15 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
+import lime.lime_tabular
 import matplotlib.pyplot as plt
-
-# =====================
-# PAGE CONFIG
-# =====================
-st.set_page_config(
-    page_title="Prediksi Cardiovascular – Global Input",
-    layout="wide"
-)
+from sklearn.inspection import permutation_importance
 
 # =====================
 # LOAD MODEL
@@ -20,7 +14,6 @@ def load_model():
     return joblib.load("adaboost_modelfix.pkl")
 
 model = load_model()
-feature_names = model.feature_names_in_
 
 st.title("📂 Prediksi Penyakit Cardiovascular Berbasis Explainable AI")
 
@@ -58,36 +51,43 @@ if uploaded_file:
         if col in df.columns:
             df[col] = df[col].map(mp)
 
+    # =====================
+    # FEATURE SELECTION
+    # =====================
     X_raw = df.drop(columns=["num", "id"], errors="ignore")
 
     # =====================
-    # FEATURE MAPPING
+    # FEATURE NAME MAPPING
     # =====================
-    df_to_model_mapping = {
-        "ca": "num_major_vessels",
-        "cp": "chest_pain_type",
-        "thal": "thalassemia_type",
-        "slope": "st_slope_type",
-        "chol": "cholesterol",
-        "oldpeak": "st_depression",
-        "trestbps": "resting_blood_pressure",
+    shap_to_df_mapping = {
+        "num_major_vessels": "ca",
+        "chest_pain_type": "cp",
+        "thalassemia_type": "thal",
+        "st_slope_type": "slope",
+        "cholesterol": "chol",
+        "st_depression": "oldpeak",
+        "resting_blood_pressure": "trestbps",
         "sex": "sex",
         "age": "age",
-        "thalch": "max_heart_rate_achieved",
-        "restecg": "Restecg",
-        "exang": "exercise_induced_angina",
-        "fbs": "fasting_blood_sugar",
-        "dataset": "country"
+        "max_heart_rate_achieved": "thalch",
+        "Restecg": "restecg",
+        "exercise_induced_angina": "exang",
+        "fasting_blood_sugar": "fbs",
+        "country": "dataset"
     }
 
+    df_to_model_mapping = {v: k for k, v in shap_to_df_mapping.items()}
     X_model = X_raw.rename(columns=df_to_model_mapping)
 
-    for col in feature_names:
+    # =====================
+    # SAMAKAN FITUR MODEL
+    # =====================
+    for col in model.feature_names_in_:
         if col not in X_model.columns:
             X_model[col] = 0
 
     X_model = (
-        X_model[feature_names]
+        X_model[model.feature_names_in_]
         .apply(pd.to_numeric, errors="coerce")
         .fillna(0)
     )
@@ -95,90 +95,113 @@ if uploaded_file:
     # =====================
     # PREDICTION
     # =====================
-    df["prediction"] = model.predict(X_model)
-    df["probability"] = model.predict_proba(X_model)[:, 1]
+    preds = model.predict(X_model)
+    probs = model.predict_proba(X_model)[:, 1]
+
+    df["prediction"] = preds
+    df["probability"] = probs
 
     st.subheader("📌 Hasil Prediksi")
     st.dataframe(df.head())
 
     # =====================
-    # SHAP GLOBAL (TREE EXPLAINER – AMAN)
+    # INTERPRETASI
     # =====================
-    st.subheader("🧠 SHAP – Global Feature Importance")
+    st.subheader("📝 Interpretasi Hasil Prediksi")
 
-    import shap
+    total = len(df)
+    total_cvd = int(df["prediction"].sum())
 
-    explainer = shap.TreeExplainer(model)
+    st.markdown(f"""
+    Dari **{total} data pasien** yang dianalisis:
 
-    sample_X = X_model.sample(
-        min(100, len(X_model)),
-        random_state=42
+    - **{total_cvd} pasien** diprediksi **mengalami penyakit kardiovaskular (CVD)**
+    - **{total - total_cvd} pasien** diprediksi **tidak mengalami CVD**
+    """)
+
+    # =====================
+    # GLOBAL FEATURE IMPORTANCE
+    # =====================
+    st.subheader("🧠 Global Feature Importance (Permutation Importance)")
+
+    y_for_importance = df["prediction"]
+
+    result = permutation_importance(
+        model,
+        X_model,
+        y_for_importance,
+        n_repeats=10,
+        random_state=42,
+        n_jobs=-1
     )
 
-    shap_values = explainer.shap_values(sample_X)
+    importance_df = pd.DataFrame({
+        "Feature": X_model.columns,
+        "Importance": result.importances_mean
+    }).sort_values("Importance", ascending=False)
+
+    st.dataframe(importance_df.head(10))
 
     fig, ax = plt.subplots()
-    shap.summary_plot(
-        shap_values[1] if isinstance(shap_values, list) else shap_values,
-        sample_X,
-        show=False
+    importance_df.head(10).plot.barh(
+        x="Feature",
+        y="Importance",
+        ax=ax,
+        legend=False
     )
+    ax.invert_yaxis()
+    plt.title("Top 10 Feature Importance")
+    plt.tight_layout()
     st.pyplot(fig)
 
-    st.caption(
-        "SHAP TreeExplainer digunakan karena efisien dan stabil "
-        "untuk model berbasis tree seperti AdaBoost."
-    )
-
     # =====================
-    # LIME LOCAL (SAFE MODE)
+    # LIME LOCAL EXPLANATION
     # =====================
     st.subheader("🧩 LIME – Local Explanation")
 
-    import lime.lime_tabular
-
-    idx = st.slider(
-        "Pilih indeks data",
-        0,
-        len(X_model) - 1,
-        0
-    )
-
-    lime_background = X_model.sample(
-        min(50, len(X_model)),
-        random_state=42
-    ).values
+    idx = st.slider("Pilih indeks data", 0, len(X_model) - 1, 0)
 
     lime_explainer = lime.lime_tabular.LimeTabularExplainer(
-        training_data=lime_background,
-        feature_names=feature_names,
+        training_data=X_model.values,
+        feature_names=X_model.columns.tolist(),
         class_names=["No CVD", "CVD"],
         mode="classification"
     )
 
     exp = lime_explainer.explain_instance(
         X_model.iloc[idx].values,
-        model.predict_proba,
-        num_features=5
+        model.predict_proba
     )
 
-    fig_lime = exp.as_pyplot_figure(label=1)
-    fig_lime.patch.set_facecolor("white")
-    st.pyplot(fig_lime)
+    st.components.v1.html(exp.as_html(), height=650, scrolling=True)
 
     # =====================
-    # KESIMPULAN
+    # KORELASI FITUR
     # =====================
-    st.subheader("📌 Kesimpulan")
+    st.subheader("📈 Korelasi Fitur terhadap Target")
 
-    st.markdown("""
-    - **SHAP digunakan untuk analisis global**, menilai kontribusi fitur
-      terhadap seluruh dataset.
-    - **LIME digunakan untuk analisis lokal**, menjelaskan keputusan model
-      pada satu pasien tertentu.
-    - Pendekatan ini menjaga **keseimbangan interpretabilitas dan performa sistem**.
-    """)
+    if "num" in df.columns:
+        y = df["num"]
+
+        corr_data = []
+        for col in X_raw.columns:
+            x = pd.to_numeric(df[col], errors="coerce")
+            if x.nunique() > 1:
+                corr_data.append([
+                    col,
+                    x.corr(y, method="spearman"),
+                    x.corr(y, method="kendall")
+                ])
+
+        corr_df = pd.DataFrame(
+            corr_data,
+            columns=["Feature", "Spearman", "Kendall"]
+        ).set_index("Feature")
+
+        corr_df["Abs_Spearman"] = corr_df["Spearman"].abs()
+        corr_df = corr_df.sort_values("Abs_Spearman", ascending=False)
+
+        st.dataframe(corr_df[["Spearman", "Kendall"]].head(10))
 
 else:
     st.info("📂 Silakan upload file CSV terlebih dahulu.")
-
