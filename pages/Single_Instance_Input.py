@@ -6,19 +6,46 @@ import matplotlib.pyplot as plt
 import lime.lime_tabular
 import json
 
-# =====================
+# =====================================================
 # PAGE CONFIG
-# =====================
+# =====================================================
 st.set_page_config(
-    page_title="Prediksi Cardiovascular – ONNX",
+    page_title="Prediksi Cardiovascular – Single Input (ONNX)",
     layout="wide"
 )
 
-# =====================
+# =====================================================
+# UTIL: AMAN EKSTRAK PROBABILITAS ONNX
+# =====================================================
+def extract_positive_proba(proba_output):
+    """
+    Aman untuk semua format output ONNX:
+    - numpy array
+    - list
+    - list of dict (sklearn -> ONNX)
+    """
+    # List (umumnya list of dict)
+    if isinstance(proba_output, list):
+        first = proba_output[0]
+
+        if isinstance(first, dict):
+            return float(first.get(1, 0.0))
+
+        return float(first[1])
+
+    # Numpy array
+    if isinstance(proba_output, np.ndarray):
+        if proba_output.ndim == 2:
+            return float(proba_output[0, 1])
+        return float(proba_output[0])
+
+    return float(proba_output)
+
+# =====================================================
 # LOAD ONNX MODEL
-# =====================
+# =====================================================
 @st.cache_resource
-def load_onnx_model():
+def load_onnx():
     session = ort.InferenceSession(
         "adaboost_model.onnx",
         providers=["CPUExecutionProvider"]
@@ -33,13 +60,13 @@ def load_onnx_model():
     return session, feature_names, input_name, output_names
 
 
-session, FEATURE_NAMES, INPUT_NAME, OUTPUT_NAMES = load_onnx_model()
+session, FEATURE_NAMES, INPUT_NAME, OUTPUT_NAMES = load_onnx()
 
-st.title("🫀 Prediksi Penyakit Cardiovascular (ONNX – Single Input)")
+# =====================================================
+# UI
+# =====================================================
+st.title("🫀 Prediksi Penyakit Cardiovascular – Single Input (ONNX)")
 
-# =====================
-# FORM INPUT
-# =====================
 with st.form("input_form"):
     age = st.number_input("Usia", 1, 120, 45)
     sex = st.selectbox("Jenis Kelamin", ["Perempuan", "Laki-laki"])
@@ -60,14 +87,14 @@ with st.form("input_form"):
 
     submit = st.form_submit_button("🔍 Prediksi")
 
-# =====================
-# PREDIKSI
-# =====================
+# =====================================================
+# INFERENCE
+# =====================================================
 if submit:
 
-    # =====================
-    # RAW INPUT
-    # =====================
+    # -----------------
+    # INPUT KE FORMAT MODEL
+    # -----------------
     input_df = pd.DataFrame([{
         "age": age,
         "sex": sex,
@@ -85,48 +112,38 @@ if submit:
         "thalassemia_type": thal
     }])
 
-    # =====================
-    # SAMAKAN URUTAN FITUR
-    # =====================
+    # Samakan fitur
     for col in FEATURE_NAMES:
         if col not in input_df.columns:
             input_df[col] = 0
 
     input_df = input_df[FEATURE_NAMES].astype(np.float32)
 
-    # =====================
-    # ONNX INFERENCE (SAFE)
-    # =====================
+    # -----------------
+    # ONNX PREDICT
+    # -----------------
     outputs = session.run(
         OUTPUT_NAMES,
         {INPUT_NAME: input_df.values}
     )
 
-    # Label prediksi
     pred = int(outputs[0][0])
+    prob = extract_positive_proba(outputs[1])
 
-    # Probabilitas (AMAN SEMUA BENTUK)
-    proba_out = outputs[1]
-
-    if proba_out.ndim == 2:
-        prob = float(proba_out[0, 1])
-    else:
-        prob = float(proba_out[0])
-
-    # =====================
+    # -----------------
     # OUTPUT
-    # =====================
+    # -----------------
     st.subheader("📌 Hasil Prediksi")
     st.metric("Probabilitas CVD", f"{prob:.2f}")
     st.write("Prediksi:", "🟥 CVD" if pred == 1 else "🟩 Tidak CVD")
 
-    # =====================
-    # LOCAL FEATURE IMPACT (ONNX SAFE)
-    # =====================
+    # =====================================================
+    # LOCAL FEATURE IMPACT (AMAN ONNX)
+    # =====================================================
     st.subheader("🧠 Local Feature Impact")
 
-    base_prob = prob
     impacts = []
+    base_prob = prob
 
     for col in FEATURE_NAMES:
         temp = input_df.copy()
@@ -137,18 +154,11 @@ if submit:
             {INPUT_NAME: temp.values}
         )
 
-        proba_temp = out[1]
-
-        if proba_temp.ndim == 2:
-            new_prob = float(proba_temp[0, 1])
-        else:
-            new_prob = float(proba_temp[0])
-
+        new_prob = extract_positive_proba(out[1])
         impacts.append([col, base_prob - new_prob])
 
     importance_df = pd.DataFrame(
-        impacts,
-        columns=["Feature", "Impact"]
+        impacts, columns=["Feature", "Impact"]
     ).sort_values("Impact", ascending=False)
 
     st.dataframe(importance_df.head(8))
@@ -164,9 +174,9 @@ if submit:
     plt.title("Local Feature Impact")
     st.pyplot(fig)
 
-    # =====================
-    # LIME (ONNX WRAPPER SAFE)
-    # =====================
+    # =====================================================
+    # LIME (ONNX WRAPPER – STABLE)
+    # =====================================================
     st.subheader("🧩 LIME – Local Explanation")
 
     def onnx_predict_proba(x):
@@ -175,13 +185,16 @@ if submit:
             {INPUT_NAME: x.astype(np.float32)}
         )
 
-        proba = out[1]
+        proba_out = out[1]
+        probs = []
 
-        # Pastikan shape (n_samples, 2)
-        if proba.ndim == 1:
-            proba = np.column_stack([1 - proba, proba])
+        for p in proba_out:
+            if isinstance(p, dict):
+                probs.append([p.get(0, 0.0), p.get(1, 0.0)])
+            else:
+                probs.append(p)
 
-        return proba
+        return np.array(probs, dtype=np.float32)
 
     background = np.zeros((20, len(FEATURE_NAMES)), dtype=np.float32)
 
@@ -200,9 +213,9 @@ if submit:
 
     st.pyplot(exp.as_pyplot_figure())
 
-    # =====================
+    # =====================================================
     # INTERPRETASI
-    # =====================
+    # =====================================================
     st.subheader("📝 Interpretasi Prediksi")
 
     confidence = (
@@ -212,7 +225,7 @@ if submit:
     )
 
     st.markdown(f"""
-    Model **AdaBoost (ONNX)** memprediksi risiko penyakit kardiovaskular  
-    dengan tingkat keyakinan **{confidence}**  
+    Model **AdaBoost (ONNX)** memprediksi risiko penyakit kardiovaskular
+    dengan tingkat keyakinan **{confidence}**
     (probabilitas **{prob:.2f}**).
     """)
