@@ -10,7 +10,7 @@ import json
 # PAGE CONFIG
 # =====================
 st.set_page_config(
-    page_title="Prediksi Cardiovascular – Single Input (ONNX)",
+    page_title="Prediksi Cardiovascular – ONNX",
     layout="wide"
 )
 
@@ -18,7 +18,7 @@ st.set_page_config(
 # LOAD ONNX MODEL
 # =====================
 @st.cache_resource
-def load_onnx():
+def load_onnx_model():
     session = ort.InferenceSession(
         "adaboost_model.onnx",
         providers=["CPUExecutionProvider"]
@@ -33,9 +33,9 @@ def load_onnx():
     return session, feature_names, input_name, output_names
 
 
-session, FEATURE_NAMES, INPUT_NAME, OUTPUT_NAMES = load_onnx()
+session, FEATURE_NAMES, INPUT_NAME, OUTPUT_NAMES = load_onnx_model()
 
-st.title("🫀 Prediksi Penyakit Cardiovascular – Single Input (ONNX)")
+st.title("🫀 Prediksi Penyakit Cardiovascular (ONNX – Single Input)")
 
 # =====================
 # FORM INPUT
@@ -92,21 +92,26 @@ if submit:
         if col not in input_df.columns:
             input_df[col] = 0
 
-    input_df = (
-        input_df[FEATURE_NAMES]
-        .astype(np.float32)
-    )
+    input_df = input_df[FEATURE_NAMES].astype(np.float32)
 
     # =====================
-    # ONNX INFERENCE
+    # ONNX INFERENCE (SAFE)
     # =====================
     outputs = session.run(
         OUTPUT_NAMES,
         {INPUT_NAME: input_df.values}
     )
 
+    # Label prediksi
     pred = int(outputs[0][0])
-    prob = float(outputs[1][0][1])
+
+    # Probabilitas (AMAN SEMUA BENTUK)
+    proba_out = outputs[1]
+
+    if proba_out.ndim == 2:
+        prob = float(proba_out[0, 1])
+    else:
+        prob = float(proba_out[0])
 
     # =====================
     # OUTPUT
@@ -132,7 +137,13 @@ if submit:
             {INPUT_NAME: temp.values}
         )
 
-        new_prob = float(out[1][0][1])
+        proba_temp = out[1]
+
+        if proba_temp.ndim == 2:
+            new_prob = float(proba_temp[0, 1])
+        else:
+            new_prob = float(proba_temp[0])
+
         impacts.append([col, base_prob - new_prob])
 
     importance_df = pd.DataFrame(
@@ -154,7 +165,7 @@ if submit:
     st.pyplot(fig)
 
     # =====================
-    # LIME (ONNX WRAPPER)
+    # LIME (ONNX WRAPPER SAFE)
     # =====================
     st.subheader("🧩 LIME – Local Explanation")
 
@@ -163,7 +174,14 @@ if submit:
             OUTPUT_NAMES,
             {INPUT_NAME: x.astype(np.float32)}
         )
-        return out[1]
+
+        proba = out[1]
+
+        # Pastikan shape (n_samples, 2)
+        if proba.ndim == 1:
+            proba = np.column_stack([1 - proba, proba])
+
+        return proba
 
     background = np.zeros((20, len(FEATURE_NAMES)), dtype=np.float32)
 
@@ -194,7 +212,7 @@ if submit:
     )
 
     st.markdown(f"""
-    Model **AdaBoost (ONNX)** memprediksi risiko penyakit kardiovaskular
-    dengan tingkat keyakinan **{confidence}**
+    Model **AdaBoost (ONNX)** memprediksi risiko penyakit kardiovaskular  
+    dengan tingkat keyakinan **{confidence}**  
     (probabilitas **{prob:.2f}**).
     """)
