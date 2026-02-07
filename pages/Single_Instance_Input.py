@@ -14,16 +14,11 @@ st.set_page_config(
 )
 
 # =====================
-# DETEKSI HUGGING FACE
-# =====================
-IS_HF = os.getenv("SPACE_ID") is not None
-
-# =====================
 # LOAD MODEL (AMAN)
 # =====================
 @st.cache_resource
 def load_model():
-    return joblib.load("src/adaboost_modelfix.pkl")
+    return joblib.load("adaboost_modelfix.pkl")
 
 model = load_model()
 feature_names = model.feature_names_in_
@@ -191,5 +186,6 @@ if submit:
     - Kombinasi SHAP dan LIME meningkatkan transparansi model
       tanpa mengorbankan performa sistem.
     """)
+
 
 
