@@ -3,10 +3,11 @@ import numpy as np
 import pandas as pd
 import joblib
 import matplotlib.pyplot as plt
-import os
+from sklearn.inspection import permutation_importance
+import lime.lime_tabular
 
 # =====================
-# PAGE CONFIG (WAJIB PALING ATAS)
+# PAGE CONFIG
 # =====================
 st.set_page_config(
     page_title="Prediksi Cardiovascular – Single Input",
@@ -14,7 +15,7 @@ st.set_page_config(
 )
 
 # =====================
-# LOAD MODEL (AMAN)
+# LOAD MODEL
 # =====================
 @st.cache_resource
 def load_model():
@@ -97,37 +98,43 @@ if submit:
     st.write("Prediksi:", "🟥 CVD" if pred == 1 else "🟩 Tidak CVD")
 
     # =====================
-    # SHAP (TREE EXPLAINER – AMAN)
+    # LOCAL FEATURE IMPORTANCE (Permutation – Aman)
     # =====================
-    st.subheader("🧠 SHAP – Local Explanation")
+    st.subheader("🧠 Local Feature Importance")
 
-    import shap
+    base_prob = model.predict_proba(input_df)[0][1]
+    impacts = []
 
-    explainer = shap.TreeExplainer(model)
-    shap_values = explainer.shap_values(input_df)
+    for col in feature_names:
+        temp = input_df.copy()
+        temp[col] = 0
+        new_prob = model.predict_proba(temp)[0][1]
+        impacts.append([col, base_prob - new_prob])
+
+    importance_df = pd.DataFrame(
+        impacts,
+        columns=["Feature", "Impact"]
+    ).sort_values("Impact", ascending=False)
+
+    st.dataframe(importance_df.head(8))
 
     fig, ax = plt.subplots()
-    shap.summary_plot(
-        shap_values[1] if isinstance(shap_values, list) else shap_values,
-        input_df,
-        plot_type="bar",
-        show=False
+    importance_df.head(8).plot.barh(
+        x="Feature",
+        y="Impact",
+        ax=ax,
+        legend=False
     )
+    ax.invert_yaxis()
+    plt.title("Local Feature Impact")
     st.pyplot(fig)
 
-    st.caption(
-        "SHAP menggunakan TreeExplainer yang efisien dan stabil "
-        "untuk model berbasis tree seperti AdaBoost."
-    )
-
     # =====================
-    # LIME (OPSIONAL & AMAN)
+    # LIME (LOCAL – AMAN)
     # =====================
     st.subheader("🧩 LIME – Local Explanation")
 
-    import lime.lime_tabular
-
-    background = np.zeros((10, input_df.shape[1]))
+    background = np.zeros((20, input_df.shape[1]))
 
     lime_explainer = lime.lime_tabular.LimeTabularExplainer(
         training_data=background,
@@ -151,27 +158,13 @@ if submit:
     # =====================
     st.subheader("📝 Interpretasi Prediksi")
 
-    lime_results = exp.as_list(label=1)
-
-    positive = [f for f in lime_results if f[1] > 0]
-    negative = [f for f in lime_results if f[1] <= 0]
-
     confidence = "tinggi" if prob >= 0.75 else "sedang" if prob >= 0.5 else "rendah"
 
     st.markdown(f"""
     Model **AdaBoost** memprediksi risiko penyakit kardiovaskular
-    dengan tingkat keyakinan **{confidence}** (probabilitas **{prob:.2f}**).
+    dengan tingkat keyakinan **{confidence}**
+    (probabilitas **{prob:.2f}**).
     """)
-
-    if positive:
-        st.markdown("🔺 **Fitur yang meningkatkan risiko:**")
-        for f, w in positive:
-            st.markdown(f"- {f} (kontribusi: {w:.3f})")
-
-    if negative:
-        st.markdown("🔻 **Fitur yang menurunkan risiko:**")
-        for f, w in negative:
-            st.markdown(f"- {f} (kontribusi: {w:.3f})")
 
     # =====================
     # KESIMPULAN
@@ -179,13 +172,10 @@ if submit:
     st.subheader("📌 Kesimpulan Ilmiah")
 
     st.markdown("""
-    - **SHAP TreeExplainer** digunakan karena efisien dan stabil
-      untuk model berbasis pohon.
-    - **LIME** memberikan interpretasi lokal yang intuitif
-      pada satu pasien.
-    - Kombinasi SHAP dan LIME meningkatkan transparansi model
-      tanpa mengorbankan performa sistem.
+    - Analisis lokal dilakukan menggunakan **LIME** dan
+      **local permutation impact**.
+    - Pendekatan ini **stabil di Python 3.13** dan
+      **aman untuk deployment cloud**.
+    - Model tetap transparan tanpa ketergantungan
+      pada library berat seperti SHAP.
     """)
-
-
-
