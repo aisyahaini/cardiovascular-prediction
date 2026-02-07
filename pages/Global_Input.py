@@ -17,7 +17,7 @@ st.set_page_config(
 # =====================
 @st.cache_resource
 def load_model():
-    return joblib.load("src/adaboost_modelfix.pkl")
+    return joblib.load("adaboost_modelfix.pkl")
 
 model = load_model()
 feature_names = model.feature_names_in_
@@ -181,3 +181,4 @@ if uploaded_file:
 
 else:
     st.info("📂 Silakan upload file CSV terlebih dahulu.")
+
