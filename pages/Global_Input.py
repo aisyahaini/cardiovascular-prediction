@@ -11,7 +11,7 @@ from sklearn.inspection import permutation_importance
 # =====================
 @st.cache_resource
 def load_model():
-    return joblib.load("adaboost_modelfix.pkl")
+    return joblib.load("adaboost_model.onnx")
 
 model = load_model()
 
@@ -205,3 +205,4 @@ if uploaded_file:
 
 else:
     st.info("📂 Silakan upload file CSV terlebih dahulu.")
+
