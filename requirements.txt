@@ -1,18 +1,14 @@
-streamlit==1.31.1
+streamlit>=1.31.0
 
-numpy==1.26.4
-pandas==1.5.3
+numpy>=1.26,<2.0
+pandas>=1.5,<2.0
 
-scikit-learn==1.2.2
-joblib
+scikit-learn>=1.2,<1.4
+joblib>=1.2
 
-matplotlib
-seaborn
-plotly
-
-shap==0.41.0
-numba==0.56.4
-llvmlite==0.39.1
+matplotlib>=3.7
+seaborn>=0.12
+plotly>=5.18
 
 lime==0.2.0.1
-pillow
+pillow>=9.5
