@@ -122,46 +122,54 @@ if submit:
     # =====================================================
     # LOCAL FEATURE IMPACT (AMAN)
     # =====================================================
-    st.subheader("🧠 Local Feature Impact")
+    # =====================
+# LIME (ONNX SAFE VERSION)
+# =====================
+st.subheader("🧩 LIME – Local Explanation")
 
-    impacts = []
-    base_prob = prob
-
-    for i, col in enumerate(FEATURE_NAMES):
-        X_temp = X.copy()
-        X_temp[0, i] = 0
-
-        new_prob = onnx_predict_proba(X_temp)[0, 1]
-        impacts.append([col, base_prob - new_prob])
-
-    imp_df = pd.DataFrame(impacts, columns=["Feature", "Impact"])
-    imp_df = imp_df.sort_values("Impact", ascending=False)
-
-    st.dataframe(imp_df.head(8))
-
-    fig, ax = plt.subplots()
-    imp_df.head(8).plot.barh(x="Feature", y="Impact", ax=ax, legend=False)
-    ax.invert_yaxis()
-    st.pyplot(fig)
-
-    # =====================================================
-    # LIME (STABLE)
-    # =====================================================
-    st.subheader("🧩 LIME – Local Explanation")
-
-    background = np.zeros((20, X.shape[1]), dtype=np.float32)
-
-    explainer = lime.lime_tabular.LimeTabularExplainer(
-        training_data=background,
-        feature_names=FEATURE_NAMES,
-        class_names=["No CVD", "CVD"],
-        mode="classification"
+# ---- Wrapper predict_proba untuk ONNX ----
+def onnx_predict_proba(x):
+    x = np.asarray(x, dtype=np.float32)
+    out = session.run(
+        OUTPUT_NAMES,
+        {INPUT_NAME: x}
     )
 
-    exp = explainer.explain_instance(
-        X[0],
-        onnx_predict_proba,
-        num_features=5
-    )
+    # Pastikan output probabilitas 2D
+    proba = out[1]
+    if proba.ndim == 1:
+        proba = np.vstack([1 - proba, proba]).T
 
-    st.pyplot(exp.as_pyplot_figure())
+    return proba
+
+
+# ---- Background data (WAJIB: BUKAN ZEROS) ----
+rng = np.random.default_rng(42)
+background = rng.normal(
+    loc=input_df.values,
+    scale=0.01,
+    size=(50, input_df.shape[1])
+).astype(np.float32)
+
+# ---- LIME Explainer (TANPA forward_selection) ----
+explainer = lime.lime_tabular.LimeTabularExplainer(
+    training_data=background,
+    feature_names=FEATURE_NAMES,
+    class_names=["No CVD", "CVD"],
+    mode="classification",
+    discretize_continuous=False,
+    feature_selection="none"  # 🔥 FIX UTAMA
+)
+
+# ---- Explain instance ----
+exp = explainer.explain_instance(
+    input_df.values[0],
+    onnx_predict_proba,
+    num_features=5
+)
+
+# ---- Plot ----
+fig = exp.as_pyplot_figure()
+fig.patch.set_facecolor("white")
+st.pyplot(fig)
+
