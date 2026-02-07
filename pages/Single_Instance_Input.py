@@ -2,9 +2,8 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import joblib
-import shap
-import lime.lime_tabular
 import matplotlib.pyplot as plt
+import os
 
 # =====================
 # PAGE CONFIG (WAJIB PALING ATAS)
@@ -15,16 +14,21 @@ st.set_page_config(
 )
 
 # =====================
-# LOAD MODEL
+# DETEKSI HUGGING FACE
+# =====================
+IS_HF = os.getenv("SPACE_ID") is not None
+
+# =====================
+# LOAD MODEL (AMAN)
 # =====================
 @st.cache_resource
 def load_model():
-    return joblib.load("adaboost_modelfix.pkl")
+    return joblib.load("src/adaboost_modelfix.pkl")
 
 model = load_model()
 feature_names = model.feature_names_in_
 
-st.title("🫀 Prediksi Manual Penyakit Cardiovascular (Single Input)")
+st.title("🫀 Prediksi Penyakit Cardiovascular – Single Input")
 
 # =====================
 # FORM INPUT
@@ -53,7 +57,7 @@ with st.form("input_form"):
 # PREDIKSI
 # =====================
 if submit:
-    input_df = pd.DataFrame([[
+    input_df = pd.DataFrame([[ 
         age, sex, dataset, cp, trestbps, chol, fbs,
         restecg, thalch, exang, oldpeak, slope, ca, thal
     ]], columns=[
@@ -61,7 +65,7 @@ if submit:
         "restecg","thalch","exang","oldpeak","slope","ca","thal"
     ])
 
-    # Mapping ke fitur model
+    # Mapping fitur
     mapping = {
         "ca": "num_major_vessels",
         "cp": "chest_pain_type",
@@ -81,7 +85,6 @@ if submit:
 
     input_df = input_df.rename(columns=mapping)
 
-    # Samakan fitur
     for col in feature_names:
         if col not in input_df.columns:
             input_df[col] = 0
@@ -99,41 +102,37 @@ if submit:
     st.write("Prediksi:", "🟥 CVD" if pred == 1 else "🟩 Tidak CVD")
 
     # =====================
-    # SHAP (LOCAL – BAR)
+    # SHAP (TREE EXPLAINER – AMAN)
     # =====================
     st.subheader("🧠 SHAP – Local Explanation")
 
-    background = np.zeros((50, input_df.shape[1]))
+    import shap
 
-    shap_explainer = shap.KernelExplainer(
-        model.predict_proba,
-        background
-    )
-
-    shap_values = shap_explainer.shap_values(
-        input_df,
-        nsamples=100
-    )[1]
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(input_df)
 
     fig, ax = plt.subplots()
     shap.summary_plot(
-        shap_values,
+        shap_values[1] if isinstance(shap_values, list) else shap_values,
         input_df,
-        feature_names=feature_names,
         plot_type="bar",
         show=False
     )
     st.pyplot(fig)
 
     st.caption(
-        "SHAP memberikan interpretasi berbasis kontribusi fitur "
-        "dan lebih stabil untuk analisis global."
+        "SHAP menggunakan TreeExplainer yang efisien dan stabil "
+        "untuk model berbasis tree seperti AdaBoost."
     )
 
     # =====================
-    # LIME – LOCAL EXPLANATION (GRAFIK PUTIH)
+    # LIME (OPSIONAL & AMAN)
     # =====================
     st.subheader("🧩 LIME – Local Explanation")
+
+    import lime.lime_tabular
+
+    background = np.zeros((10, input_df.shape[1]))
 
     lime_explainer = lime.lime_tabular.LimeTabularExplainer(
         training_data=background,
@@ -148,59 +147,47 @@ if submit:
         num_features=5
     )
 
-    # === TAMPILKAN GRAFIK LIME (MATPLOTLIB) ===
     fig_lime = exp.as_pyplot_figure(label=1)
     fig_lime.patch.set_facecolor("white")
     st.pyplot(fig_lime)
 
     # =====================
-    # INTERPRETASI OTOMATIS BERBASIS LIME
+    # INTERPRETASI OTOMATIS
     # =====================
-    st.subheader("📝 Interpretasi Hasil Prediksi")
+    st.subheader("📝 Interpretasi Prediksi")
 
     lime_results = exp.as_list(label=1)
-    positive_features = []
-    negative_features = []
 
-    for feature, weight in lime_results:
-        if weight > 0:
-            positive_features.append((feature, weight))
-        else:
-            negative_features.append((feature, weight))
+    positive = [f for f in lime_results if f[1] > 0]
+    negative = [f for f in lime_results if f[1] <= 0]
 
-    confidence = (
-        "tinggi" if prob >= 0.75 else
-        "sedang" if prob >= 0.5 else
-        "rendah"
-    )
+    confidence = "tinggi" if prob >= 0.75 else "sedang" if prob >= 0.5 else "rendah"
 
     st.markdown(f"""
-    Model **AdaBoost** mampu memprediksi risiko penyakit kardiovaskular (CVD)
+    Model **AdaBoost** memprediksi risiko penyakit kardiovaskular
     dengan tingkat keyakinan **{confidence}** (probabilitas **{prob:.2f}**).
-
-    Berdasarkan **LIME**, prediksi pada **satu pasien** ini terutama dipengaruhi oleh:
     """)
 
-    if positive_features:
+    if positive:
         st.markdown("🔺 **Fitur yang meningkatkan risiko:**")
-        for f, w in positive_features:
+        for f, w in positive:
             st.markdown(f"- {f} (kontribusi: {w:.3f})")
 
-    if negative_features:
+    if negative:
         st.markdown("🔻 **Fitur yang menurunkan risiko:**")
-        for f, w in negative_features:
+        for f, w in negative:
             st.markdown(f"- {f} (kontribusi: {w:.3f})")
 
     # =====================
-    # KESIMPULAN ILMIAH
+    # KESIMPULAN
     # =====================
     st.subheader("📌 Kesimpulan Ilmiah")
 
     st.markdown("""
-    - **LIME lebih unggul untuk analisis individual**, karena menjelaskan keputusan model
-      secara spesifik pada satu pasien.
-    - **SHAP tetap memiliki keunggulan**, terutama untuk analisis global karena konsisten
-      secara teoritis dan stabil terhadap seluruh dataset.
-    - Oleh karena itu, pada **single input**, LIME menjadi metode utama,
-      sementara SHAP berfungsi sebagai pendukung interpretasi global model.
+    - **SHAP TreeExplainer** digunakan karena efisien dan stabil
+      untuk model berbasis pohon.
+    - **LIME** memberikan interpretasi lokal yang intuitif
+      pada satu pasien.
+    - Kombinasi SHAP dan LIME meningkatkan transparansi model
+      tanpa mengorbankan performa sistem.
     """)
