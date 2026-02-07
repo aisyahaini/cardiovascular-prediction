@@ -7,6 +7,28 @@ import matplotlib.pyplot as plt
 import json
 
 # =====================================================
+# HELPER: EXTRACT PROBABILITY FROM ONNX OUTPUT
+# =====================================================
+def extract_proba(outputs):
+    """
+    Convert ONNX outputs to (N, 2) probability matrix
+    Safe for AdaBoost / Tree-based ONNX models
+    """
+    proba_raw = outputs[1]
+
+    # Case 1: list of dicts [{0:p0,1:p1}, ...]
+    if isinstance(proba_raw[0], dict):
+        return np.array([[p[0], p[1]] for p in proba_raw])
+
+    # Case 2: 1D array (only class-1 prob)
+    if np.ndim(proba_raw) == 1:
+        return np.column_stack([1 - proba_raw, proba_raw])
+
+    # Case 3: already (N,2)
+    return np.array(proba_raw)
+
+
+# =====================================================
 # LOAD ONNX MODEL & FEATURE NAMES
 # =====================================================
 @st.cache_resource
@@ -15,6 +37,7 @@ def load_onnx_model():
         "adaboost_model.onnx",
         providers=["CPUExecutionProvider"]
     )
+
     with open("feature_names.json", "r") as f:
         feature_names = json.load(f)
 
@@ -94,7 +117,7 @@ if uploaded_file:
     X_model = X_raw.rename(columns=df_to_model_mapping)
 
     # =====================
-    # SAMAKAN FITUR MODEL
+    # ALIGN FEATURES WITH MODEL
     # =====================
     for col in FEATURE_NAMES:
         if col not in X_model.columns:
@@ -108,7 +131,7 @@ if uploaded_file:
     )
 
     # =====================
-    # PREDICTION (ONNX)
+    # PREDICTION (ONNX - FIXED)
     # =====================
     outputs = session.run(
         OUTPUT_NAMES,
@@ -116,7 +139,8 @@ if uploaded_file:
     )
 
     preds = outputs[0]
-    probs = outputs[1][:, 1]
+    proba_matrix = extract_proba(outputs)
+    probs = proba_matrix[:, 1]
 
     df["prediction"] = preds
     df["probability"] = probs
@@ -125,7 +149,7 @@ if uploaded_file:
     st.dataframe(df.head())
 
     # =====================
-    # INTERPRETASI
+    # INTERPRETATION
     # =====================
     st.subheader("📝 Interpretasi Hasil Prediksi")
 
@@ -135,23 +159,23 @@ if uploaded_file:
     st.markdown(f"""
     Dari **{total} data pasien** yang dianalisis:
 
-    - **{total_cvd} pasien** diprediksi **mengalami penyakit kardiovaskular (CVD)**
+    - **{total_cvd} pasien** diprediksi **mengalami CVD**
     - **{total - total_cvd} pasien** diprediksi **tidak mengalami CVD**
     """)
 
     # =====================================================
-    # LIME LOCAL EXPLANATION (ONNX WRAPPER)
+    # LIME LOCAL EXPLANATION (ONNX SAFE)
     # =====================================================
     st.subheader("🧩 LIME – Local Explanation")
 
     idx = st.slider("Pilih indeks data", 0, len(X_model) - 1, 0)
 
     def onnx_predict_proba(x):
-        result = session.run(
+        outputs = session.run(
             OUTPUT_NAMES,
             {INPUT_NAME: x.astype(np.float32)}
         )
-        return result[1]
+        return extract_proba(outputs)
 
     lime_explainer = lime.lime_tabular.LimeTabularExplainer(
         training_data=X_model.values,
@@ -166,34 +190,6 @@ if uploaded_file:
     )
 
     st.components.v1.html(exp.as_html(), height=650, scrolling=True)
-
-    # =====================
-    # KORELASI FITUR
-    # =====================
-    st.subheader("📈 Korelasi Fitur terhadap Target")
-
-    if "num" in df.columns:
-        y = df["num"]
-
-        corr_data = []
-        for col in X_raw.columns:
-            x = pd.to_numeric(df[col], errors="coerce")
-            if x.nunique() > 1:
-                corr_data.append([
-                    col,
-                    x.corr(y, method="spearman"),
-                    x.corr(y, method="kendall")
-                ])
-
-        corr_df = pd.DataFrame(
-            corr_data,
-            columns=["Feature", "Spearman", "Kendall"]
-        ).set_index("Feature")
-
-        corr_df["Abs_Spearman"] = corr_df["Spearman"].abs()
-        corr_df = corr_df.sort_values("Abs_Spearman", ascending=False)
-
-        st.dataframe(corr_df[["Spearman", "Kendall"]].head(10))
 
 else:
     st.info("📂 Silakan upload file CSV terlebih dahulu.")
