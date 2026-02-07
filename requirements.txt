@@ -1,16 +1,12 @@
-streamlit==1.31.1
+streamlit
+numpy
+pandas
+scikit-learn
+joblib
+matplotlib
+seaborn
+plotly
+shap
+lime
+pillow
 
-numpy==1.26.4
-pandas==1.5.3
-
-scikit-learn==1.2.2
-joblib==1.2.0
-
-matplotlib==3.7.2
-seaborn==0.12.2
-plotly==5.18.0
-
-shap==0.41.0
-lime==0.2.0.1
-
-pillow==9.5.0
