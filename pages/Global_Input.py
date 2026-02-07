@@ -1,27 +1,41 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import joblib
+import onnxruntime as ort
 import lime.lime_tabular
 import matplotlib.pyplot as plt
-from sklearn.inspection import permutation_importance
+import json
 
-# =====================
-# LOAD MODEL
-# =====================
+# =====================================================
+# LOAD ONNX MODEL & FEATURE NAMES
+# =====================================================
 @st.cache_resource
-def load_model():
-    return joblib.load("adaboost_model.onnx")
+def load_onnx_model():
+    session = ort.InferenceSession(
+        "adaboost_model.onnx",
+        providers=["CPUExecutionProvider"]
+    )
+    with open("feature_names.json", "r") as f:
+        feature_names = json.load(f)
 
-model = load_model()
+    input_name = session.get_inputs()[0].name
+    output_names = [o.name for o in session.get_outputs()]
 
-st.title("📂 Prediksi Penyakit Cardiovascular Berbasis Explainable AI")
+    return session, feature_names, input_name, output_names
+
+
+session, FEATURE_NAMES, INPUT_NAME, OUTPUT_NAMES = load_onnx_model()
+
+# =====================================================
+# STREAMLIT UI
+# =====================================================
+st.title("📂 Prediksi Penyakit Cardiovascular (ONNX + Explainable AI)")
 
 uploaded_file = st.file_uploader("Upload file CSV", type=["csv"])
 
-# =====================
+# =====================================================
 # MAIN LOGIC
-# =====================
+# =====================================================
 if uploaded_file:
 
     # =====================
@@ -82,21 +96,27 @@ if uploaded_file:
     # =====================
     # SAMAKAN FITUR MODEL
     # =====================
-    for col in model.feature_names_in_:
+    for col in FEATURE_NAMES:
         if col not in X_model.columns:
             X_model[col] = 0
 
     X_model = (
-        X_model[model.feature_names_in_]
+        X_model[FEATURE_NAMES]
         .apply(pd.to_numeric, errors="coerce")
         .fillna(0)
+        .astype(np.float32)
     )
 
     # =====================
-    # PREDICTION
+    # PREDICTION (ONNX)
     # =====================
-    preds = model.predict(X_model)
-    probs = model.predict_proba(X_model)[:, 1]
+    outputs = session.run(
+        OUTPUT_NAMES,
+        {INPUT_NAME: X_model.values}
+    )
+
+    preds = outputs[0]
+    probs = outputs[1][:, 1]
 
     df["prediction"] = preds
     df["probability"] = probs
@@ -119,58 +139,30 @@ if uploaded_file:
     - **{total - total_cvd} pasien** diprediksi **tidak mengalami CVD**
     """)
 
-    # =====================
-    # GLOBAL FEATURE IMPORTANCE
-    # =====================
-    st.subheader("🧠 Global Feature Importance (Permutation Importance)")
-
-    y_for_importance = df["prediction"]
-
-    result = permutation_importance(
-        model,
-        X_model,
-        y_for_importance,
-        n_repeats=10,
-        random_state=42,
-        n_jobs=-1
-    )
-
-    importance_df = pd.DataFrame({
-        "Feature": X_model.columns,
-        "Importance": result.importances_mean
-    }).sort_values("Importance", ascending=False)
-
-    st.dataframe(importance_df.head(10))
-
-    fig, ax = plt.subplots()
-    importance_df.head(10).plot.barh(
-        x="Feature",
-        y="Importance",
-        ax=ax,
-        legend=False
-    )
-    ax.invert_yaxis()
-    plt.title("Top 10 Feature Importance")
-    plt.tight_layout()
-    st.pyplot(fig)
-
-    # =====================
-    # LIME LOCAL EXPLANATION
-    # =====================
+    # =====================================================
+    # LIME LOCAL EXPLANATION (ONNX WRAPPER)
+    # =====================================================
     st.subheader("🧩 LIME – Local Explanation")
 
     idx = st.slider("Pilih indeks data", 0, len(X_model) - 1, 0)
 
+    def onnx_predict_proba(x):
+        result = session.run(
+            OUTPUT_NAMES,
+            {INPUT_NAME: x.astype(np.float32)}
+        )
+        return result[1]
+
     lime_explainer = lime.lime_tabular.LimeTabularExplainer(
         training_data=X_model.values,
-        feature_names=X_model.columns.tolist(),
+        feature_names=FEATURE_NAMES,
         class_names=["No CVD", "CVD"],
         mode="classification"
     )
 
     exp = lime_explainer.explain_instance(
         X_model.iloc[idx].values,
-        model.predict_proba
+        onnx_predict_proba
     )
 
     st.components.v1.html(exp.as_html(), height=650, scrolling=True)
@@ -205,4 +197,3 @@ if uploaded_file:
 
 else:
     st.info("📂 Silakan upload file CSV terlebih dahulu.")
-
