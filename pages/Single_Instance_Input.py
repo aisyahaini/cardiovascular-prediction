@@ -19,7 +19,7 @@ st.set_page_config(
 # =====================
 @st.cache_resource
 def load_model():
-    return joblib.load("adaboost_modelfix.pkl")
+    return joblib.load("adaboost_model.onnx")
 
 model = load_model()
 feature_names = model.feature_names_in_
@@ -179,3 +179,4 @@ if submit:
     - Model tetap transparan tanpa ketergantungan
       pada library berat seperti SHAP.
     """)
+
