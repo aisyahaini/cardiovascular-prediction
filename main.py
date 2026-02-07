@@ -1,12 +1,21 @@
 import streamlit as st
-import joblib
 
-st.title("TEST ENV")
+st.set_page_config(
+    page_title="Prediksi Cardiovascular",
+    layout="wide"
+)
 
-@st.cache_resource
-def load_model():
-    return joblib.load("src/adaboost_modelfix.pkl")
+st.title("🫀 Sistem Prediksi Penyakit Cardiovascular")
 
-model = load_model()
+st.markdown("""
+Aplikasi ini menggunakan **AdaBoost Classifier** untuk memprediksi risiko
+penyakit cardiovascular berdasarkan data klinis pasien.
+a
+### 📌 Fitur Aplikasi:
+- Prediksi berbasis **file CSV**
+- Prediksi **input manual**
+- Interpretabilitas model (SHAP & LIME)
+- Evaluasi korelasi fitur (Spearman & Kendall)
 
-st.success("✅ Model berhasil diload")
+👉 Silakan pilih menu di sidebar.
+""")
