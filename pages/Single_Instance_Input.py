@@ -1,49 +1,3 @@
-Hugging Face's logo
-Hugging Face
-Models
-Datasets
-Spaces
-Community
-Docs
-Pricing
-
-
-Spaces:
-aisyahaini
-/
-cardiovascular-prediction
-
-
-like
-0
-
-App
-Files
-Community
-Settings
-cardiovascular-prediction
-/
-src
-/
-pages
-/
-Single_Instance_Input.py
-
-aisyahaini's picture
-aisyahaini
-Update single input file
-987700d
-verified
-about 12 hours ago
-raw
-
-Copy download link
-history
-blame
-edit
-delete
-
-5.7 kB
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -237,4 +191,5 @@ if submit:
     - Kombinasi SHAP dan LIME meningkatkan transparansi model
       tanpa mengorbankan performa sistem.
     """)
+
 
