@@ -1,30 +1,41 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-import joblib
+import onnxruntime as ort
 import matplotlib.pyplot as plt
-from sklearn.inspection import permutation_importance
 import lime.lime_tabular
+import json
 
 # =====================
 # PAGE CONFIG
 # =====================
 st.set_page_config(
-    page_title="Prediksi Cardiovascular – Single Input",
+    page_title="Prediksi Cardiovascular – Single Input (ONNX)",
     layout="wide"
 )
 
 # =====================
-# LOAD MODEL
+# LOAD ONNX MODEL
 # =====================
 @st.cache_resource
-def load_model():
-    return joblib.load("adaboost_model.onnx")
+def load_onnx():
+    session = ort.InferenceSession(
+        "adaboost_model.onnx",
+        providers=["CPUExecutionProvider"]
+    )
 
-model = load_model()
-feature_names = model.feature_names_in_
+    with open("feature_names.json", "r") as f:
+        feature_names = json.load(f)
 
-st.title("🫀 Prediksi Penyakit Cardiovascular – Single Input")
+    input_name = session.get_inputs()[0].name
+    output_names = [o.name for o in session.get_outputs()]
+
+    return session, feature_names, input_name, output_names
+
+
+session, FEATURE_NAMES, INPUT_NAME, OUTPUT_NAMES = load_onnx()
+
+st.title("🫀 Prediksi Penyakit Cardiovascular – Single Input (ONNX)")
 
 # =====================
 # FORM INPUT
@@ -53,62 +64,75 @@ with st.form("input_form"):
 # PREDIKSI
 # =====================
 if submit:
-    input_df = pd.DataFrame([[ 
-        age, sex, dataset, cp, trestbps, chol, fbs,
-        restecg, thalch, exang, oldpeak, slope, ca, thal
-    ]], columns=[
-        "age","sex","dataset","cp","trestbps","chol","fbs",
-        "restecg","thalch","exang","oldpeak","slope","ca","thal"
-    ])
 
-    # Mapping fitur
-    mapping = {
-        "ca": "num_major_vessels",
-        "cp": "chest_pain_type",
-        "thal": "thalassemia_type",
-        "slope": "st_slope_type",
-        "chol": "cholesterol",
-        "oldpeak": "st_depression",
-        "trestbps": "resting_blood_pressure",
-        "sex": "sex",
-        "age": "age",
-        "thalch": "max_heart_rate_achieved",
-        "restecg": "Restecg",
-        "exang": "exercise_induced_angina",
-        "fbs": "fasting_blood_sugar",
-        "dataset": "country"
-    }
+    # =====================
+    # RAW INPUT
+    # =====================
+    input_df = pd.DataFrame([{
+        "age": age,
+        "sex": sex,
+        "country": dataset,
+        "chest_pain_type": cp,
+        "resting_blood_pressure": trestbps,
+        "cholesterol": chol,
+        "fasting_blood_sugar": fbs,
+        "Restecg": restecg,
+        "max_heart_rate_achieved": thalch,
+        "exercise_induced_angina": exang,
+        "st_depression": oldpeak,
+        "st_slope_type": slope,
+        "num_major_vessels": ca,
+        "thalassemia_type": thal
+    }])
 
-    input_df = input_df.rename(columns=mapping)
-
-    for col in feature_names:
+    # =====================
+    # SAMAKAN URUTAN FITUR
+    # =====================
+    for col in FEATURE_NAMES:
         if col not in input_df.columns:
             input_df[col] = 0
 
-    input_df = input_df[feature_names]
+    input_df = (
+        input_df[FEATURE_NAMES]
+        .astype(np.float32)
+    )
 
     # =====================
-    # HASIL PREDIKSI
+    # ONNX INFERENCE
     # =====================
-    pred = model.predict(input_df)[0]
-    prob = model.predict_proba(input_df)[0][1]
+    outputs = session.run(
+        OUTPUT_NAMES,
+        {INPUT_NAME: input_df.values}
+    )
 
+    pred = int(outputs[0][0])
+    prob = float(outputs[1][0][1])
+
+    # =====================
+    # OUTPUT
+    # =====================
     st.subheader("📌 Hasil Prediksi")
     st.metric("Probabilitas CVD", f"{prob:.2f}")
     st.write("Prediksi:", "🟥 CVD" if pred == 1 else "🟩 Tidak CVD")
 
     # =====================
-    # LOCAL FEATURE IMPORTANCE (Permutation – Aman)
+    # LOCAL FEATURE IMPACT (ONNX SAFE)
     # =====================
-    st.subheader("🧠 Local Feature Importance")
+    st.subheader("🧠 Local Feature Impact")
 
-    base_prob = model.predict_proba(input_df)[0][1]
+    base_prob = prob
     impacts = []
 
-    for col in feature_names:
+    for col in FEATURE_NAMES:
         temp = input_df.copy()
         temp[col] = 0
-        new_prob = model.predict_proba(temp)[0][1]
+
+        out = session.run(
+            OUTPUT_NAMES,
+            {INPUT_NAME: temp.values}
+        )
+
+        new_prob = float(out[1][0][1])
         impacts.append([col, base_prob - new_prob])
 
     importance_df = pd.DataFrame(
@@ -130,53 +154,47 @@ if submit:
     st.pyplot(fig)
 
     # =====================
-    # LIME (LOCAL – AMAN)
+    # LIME (ONNX WRAPPER)
     # =====================
     st.subheader("🧩 LIME – Local Explanation")
 
-    background = np.zeros((20, input_df.shape[1]))
+    def onnx_predict_proba(x):
+        out = session.run(
+            OUTPUT_NAMES,
+            {INPUT_NAME: x.astype(np.float32)}
+        )
+        return out[1]
 
-    lime_explainer = lime.lime_tabular.LimeTabularExplainer(
+    background = np.zeros((20, len(FEATURE_NAMES)), dtype=np.float32)
+
+    explainer = lime.lime_tabular.LimeTabularExplainer(
         training_data=background,
-        feature_names=feature_names,
+        feature_names=FEATURE_NAMES,
         class_names=["No CVD", "CVD"],
         mode="classification"
     )
 
-    exp = lime_explainer.explain_instance(
+    exp = explainer.explain_instance(
         input_df.iloc[0].values,
-        model.predict_proba,
+        onnx_predict_proba,
         num_features=5
     )
 
-    fig_lime = exp.as_pyplot_figure(label=1)
-    fig_lime.patch.set_facecolor("white")
-    st.pyplot(fig_lime)
+    st.pyplot(exp.as_pyplot_figure())
 
     # =====================
-    # INTERPRETASI OTOMATIS
+    # INTERPRETASI
     # =====================
     st.subheader("📝 Interpretasi Prediksi")
 
-    confidence = "tinggi" if prob >= 0.75 else "sedang" if prob >= 0.5 else "rendah"
+    confidence = (
+        "tinggi" if prob >= 0.75 else
+        "sedang" if prob >= 0.5 else
+        "rendah"
+    )
 
     st.markdown(f"""
-    Model **AdaBoost** memprediksi risiko penyakit kardiovaskular
+    Model **AdaBoost (ONNX)** memprediksi risiko penyakit kardiovaskular
     dengan tingkat keyakinan **{confidence}**
     (probabilitas **{prob:.2f}**).
     """)
-
-    # =====================
-    # KESIMPULAN
-    # =====================
-    st.subheader("📌 Kesimpulan Ilmiah")
-
-    st.markdown("""
-    - Analisis lokal dilakukan menggunakan **LIME** dan
-      **local permutation impact**.
-    - Pendekatan ini **stabil di Python 3.13** dan
-      **aman untuk deployment cloud**.
-    - Model tetap transparan tanpa ketergantungan
-      pada library berat seperti SHAP.
-    """)
-
