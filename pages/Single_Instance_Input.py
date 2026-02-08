@@ -1,31 +1,20 @@
 import streamlit as st
 import numpy as np
-import pandas as pd
 import onnxruntime as ort
 import matplotlib.pyplot as plt
+import pandas as pd
 
-# =========================
-# CONFIG
-# =========================
 st.set_page_config(page_title="CVD Prediction (ONNX)", layout="wide")
 
 # =========================
-# FEATURE ORDER (WAJIB SESUAI TRAINING)
+# FEATURE ORDER (HARUS SESUAI TRAINING)
 # =========================
 FEATURE_NAMES = [
-    "age",
-    "sex",
-    "chest_pain_type",
-    "resting_blood_pressure",
-    "cholesterol",
-    "fasting_blood_sugar",
-    "Restecg",
-    "max_heart_rate_achieved",
-    "exercise_induced_angina",
-    "st_depression",
-    "st_slope_type",
-    "num_major_vessels",
-    "thalassemia_type"
+    "age", "sex", "chest_pain_type", "resting_blood_pressure",
+    "cholesterol", "fasting_blood_sugar", "Restecg",
+    "max_heart_rate_achieved", "exercise_induced_angina",
+    "st_depression", "st_slope_type",
+    "num_major_vessels", "thalassemia_type"
 ]
 
 # =========================
@@ -33,40 +22,48 @@ FEATURE_NAMES = [
 # =========================
 @st.cache_resource
 def load_model():
-    session = ort.InferenceSession(
+    sess = ort.InferenceSession(
         "adaboost_model.onnx",
         providers=["CPUExecutionProvider"]
     )
-    input_name = session.get_inputs()[0].name
-    output_names = [o.name for o in session.get_outputs()]
-    return session, input_name, output_names
 
-session, INPUT_NAME, OUTPUT_NAMES = load_model()
+    input_name = sess.get_inputs()[0].name
+    input_shape = sess.get_inputs()[0].shape
+    output_names = [o.name for o in sess.get_outputs()]
+
+    return sess, input_name, input_shape, output_names
+
+session, INPUT_NAME, INPUT_SHAPE, OUTPUT_NAMES = load_model()
 
 # =========================
-# SAFE PROBABILITY EXTRACTOR
+# SAFE PROBABILITY HANDLER
 # =========================
-def extract_probability(output):
-    if isinstance(output, dict):
-        return float(output.get(1, list(output.values())[-1]))
+def get_prediction(outputs):
+    """
+    Works for:
+    - label only
+    - label + probability
+    - probability only
+    """
+    if len(outputs) == 1:
+        label = int(outputs[0][0])
+        prob = None
+    else:
+        label = int(outputs[0][0])
+        raw = outputs[1]
 
-    if isinstance(output, list):
-        output = output[0]
+        if isinstance(raw, dict):
+            prob = float(raw.get(1, list(raw.values())[-1]))
+        else:
+            raw = np.asarray(raw)
+            prob = float(raw[0, -1])
 
-    output = np.asarray(output)
-
-    if output.ndim == 2:
-        return float(output[0, -1])
-
-    if output.ndim == 1:
-        return float(output[-1])
-
-    raise ValueError("Unsupported ONNX output format")
+    return label, prob
 
 # =========================
 # UI
 # =========================
-st.title("🫀 Cardiovascular Disease Prediction (ONNX – Single Input)")
+st.title("🫀 Cardiovascular Disease Prediction (ONNX)")
 
 with st.form("input_form"):
     age = st.number_input("Age", 1, 120, 50)
@@ -94,77 +91,53 @@ if submit:
         thalach, exang, oldpeak, slope, ca, thal
     ]], dtype=np.float32)
 
-    outputs = session.run(OUTPUT_NAMES, {INPUT_NAME: X})
+    # SAFETY CHECK
+    assert X.shape[1] == INPUT_SHAPE[1], "Feature count mismatch!"
 
-    pred = int(outputs[0][0])
-    prob = extract_probability(outputs[1])
+    outputs = session.run(None, {INPUT_NAME: X})
+
+    label, prob = get_prediction(outputs)
 
     st.subheader("📊 Prediction Result")
-    st.metric("CVD Probability", f"{prob:.2f}")
-    st.success("CVD Detected" if pred == 1 else "No CVD Detected")
+    st.success("CVD Detected" if label == 1 else "No CVD Detected")
 
-    # ==================================================
-    # SHAP-STYLE (BASELINE APPROXIMATION)
-    # ==================================================
-    st.subheader("📈 Feature Contribution (SHAP-style Approximation)")
+    if prob is not None:
+        st.metric("CVD Probability", f"{prob:.2f}")
+    else:
+        st.info("Model does not provide probability output")
 
-    baseline = np.mean(X, axis=0, keepdims=True)
-    base_prob = extract_probability(
-        session.run(OUTPUT_NAMES, {INPUT_NAME: baseline})[1]
-    )
+    # =========================
+    # FEATURE IMPACT (FAST & SAFE)
+    # =========================
+    st.subheader("📈 Feature Impact (Local Approximation)")
 
-    shap_like = []
-    for i, name in enumerate(FEATURE_NAMES):
-        X_mix = baseline.copy()
-        X_mix[0, i] = X[0, i]
+    impacts = []
+    base_outputs = session.run(None, {INPUT_NAME: X})
+    _, base_prob = get_prediction(base_outputs)
 
-        p = extract_probability(
-            session.run(OUTPUT_NAMES, {INPUT_NAME: X_mix})[1]
-        )
-        shap_like.append((name, p - base_prob))
+    if base_prob is not None:
+        for i, f in enumerate(FEATURE_NAMES):
+            X_tmp = X.copy()
+            X_tmp[0, i] = 0
 
-    df_shap = pd.DataFrame(shap_like, columns=["Feature", "Contribution"]) \
-        .sort_values("Contribution", ascending=False)
+            _, p = get_prediction(
+                session.run(None, {INPUT_NAME: X_tmp})
+            )
 
-    fig, ax = plt.subplots()
-    df_shap.head(8).plot.barh(x="Feature", y="Contribution", ax=ax, legend=False)
-    ax.invert_yaxis()
-    st.pyplot(fig)
+            impacts.append((f, base_prob - p))
 
-    # ==================================================
-    # LIME-STYLE LOCAL PERTURBATION
-    # ==================================================
-    st.subheader("🧠 Feature Impact (LIME-style Approximation)")
+        df = pd.DataFrame(impacts, columns=["Feature", "Impact"]) \
+               .sort_values("Impact", ascending=False)
 
-    lime_impacts = []
-    for i, name in enumerate(FEATURE_NAMES):
-        X_tmp = X.copy()
-        X_tmp[0, i] = 0
-
-        p_new = extract_probability(
-            session.run(OUTPUT_NAMES, {INPUT_NAME: X_tmp})[1]
-        )
-        lime_impacts.append((name, prob - p_new))
-
-    df_lime = pd.DataFrame(lime_impacts, columns=["Feature", "Impact"]) \
-        .sort_values("Impact", ascending=False)
-
-    fig2, ax2 = plt.subplots()
-    df_lime.head(8).plot.barh(x="Feature", y="Impact", ax=ax2, legend=False)
-    ax2.invert_yaxis()
-    st.pyplot(fig2)
-
-    # ==================================================
-    # INTERPRETATION (PAPER / DOSEN SAFE)
-    # ==================================================
-    st.subheader("📝 Scientific Interpretation")
+        fig, ax = plt.subplots()
+        df.head(8).plot.barh(x="Feature", y="Impact", ax=ax, legend=False)
+        ax.invert_yaxis()
+        st.pyplot(fig)
 
     st.markdown("""
-    - **SHAP-style approximation** estimates each feature’s contribution
-      by comparing the patient’s value to a baseline condition.
-    - **LIME-style approximation** evaluates local sensitivity by perturbing
-      individual features and observing probability changes.
-    - These methods provide **interpretable insights** without requiring
-      additional explainability libraries, ensuring ONNX compatibility.
+    **Catatan Interpretasi:**
+    Feature impact dihitung menggunakan pendekatan *local perturbation*
+    yang setara secara konseptual dengan metode **LIME-style explanation**,
+    dan kompatibel sepenuhnya dengan ONNX runtime.
     """)
 
