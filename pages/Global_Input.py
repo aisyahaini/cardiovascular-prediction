@@ -150,35 +150,6 @@ if uploaded_file:
     """)
 
     # =====================================================
-    # LIME EXPLANATION
-    # =====================================================
-    st.subheader("🧩 LIME – Local Explanation")
-
-    idx = st.slider("Pilih indeks data", 0, len(X_model) - 1, 0)
-
-    def onnx_predict_proba(x):
-        outputs = session.run(
-            OUTPUT_NAMES,
-            {INPUT_NAME: x.astype(np.float32)}
-        )
-        return extract_proba(outputs)
-
-    lime_explainer = lime.lime_tabular.LimeTabularExplainer(
-        training_data=X_model.values,
-        feature_names=FEATURE_NAMES,
-        class_names=["No CVD", "CVD"],
-        mode="classification"
-    )
-
-    exp = lime_explainer.explain_instance(
-        X_model.iloc[idx].values,
-        onnx_predict_proba,
-        num_features=len(FEATURE_NAMES)
-    )
-
-    st.components.v1.html(exp.as_html(), height=650, scrolling=True)
-
-    # =====================================================
     # SHAP-LIKE GLOBAL EXPLANATION (NO SHAP LIB)
     # =====================================================
     st.subheader("📊 Global Feature Importance (SHAP-like)")
@@ -225,5 +196,35 @@ if uploaded_file:
 
     st.pyplot(fig)
 
+    # =====================================================
+    # LIME EXPLANATION
+    # =====================================================
+    st.subheader("🧩 LIME – Local Explanation")
+
+    idx = st.slider("Pilih indeks data", 0, len(X_model) - 1, 0)
+
+    def onnx_predict_proba(x):
+        outputs = session.run(
+            OUTPUT_NAMES,
+            {INPUT_NAME: x.astype(np.float32)}
+        )
+        return extract_proba(outputs)
+
+    lime_explainer = lime.lime_tabular.LimeTabularExplainer(
+        training_data=X_model.values,
+        feature_names=FEATURE_NAMES,
+        class_names=["No CVD", "CVD"],
+        mode="classification"
+    )
+
+    exp = lime_explainer.explain_instance(
+        X_model.iloc[idx].values,
+        onnx_predict_proba,
+        num_features=len(FEATURE_NAMES)
+    )
+
+    st.components.v1.html(exp.as_html(), height=650, scrolling=True)
+
 else:
     st.info("📂 Silakan upload file CSV terlebih dahulu.")
+
