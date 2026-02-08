@@ -53,7 +53,7 @@ def predict_proba(x):
 # UI
 # =====================================================
 st.set_page_config(layout="wide")
-st.title("🫀 Prediksi Penyakit Cardiovascular – Single Input + XAI")
+st.title("🫀 Prediksi Manual Penyakit Cardiovascular (Single Input)")
 
 # =====================================================
 # INPUT FORM
@@ -125,7 +125,7 @@ if submit:
     # =====================================================
     # LIME-LIKE LOCAL EXPLANATION (FIXED)
     # =====================================================
-    st.subheader("🧩 LIME-like Local Explanation")
+    st.subheader("🧩 LIME-Local Explanation")
     
     base_prob = prob
     lime_scores = {}
@@ -163,7 +163,7 @@ if submit:
     # =====================================================
     # SHAP-LIKE GLOBAL EXPLANATION (FIXED)
     # =====================================================
-    st.subheader("📊 SHAP-like Global Explanation")
+    st.subheader("📊 SHAP – Local Explanation")
     
     n_samples = 50
     shap_scores = {f: [] for f in FEATURE_NAMES}
@@ -197,7 +197,7 @@ if submit:
     
     fig2, ax2 = plt.subplots(figsize=(8, 6))
     ax2.barh(shap_df["Feature"], shap_df["SHAP_Global"])
-    ax2.set_title("SHAP-like Global Feature Importance")
+    ax2.set_title("SHAP – Local Explanation")
     ax2.invert_yaxis()
     st.pyplot(fig2)
 
@@ -238,5 +238,6 @@ if submit:
     - Oleh karena itu, pada **single input**, LIME menjadi metode utama,
       sementara SHAP berfungsi sebagai pendukung interpretasi global model.
     """)
+
 
 
