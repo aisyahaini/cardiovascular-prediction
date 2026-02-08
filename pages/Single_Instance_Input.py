@@ -8,7 +8,7 @@ import joblib
 # =============================
 @st.cache_resource
 def load_model():
-    return joblib.load("model.pkl")  # ganti sesuai nama model kamu
+    return joblib.load("adaboost_model.onnx")  # ganti sesuai nama model kamu
 
 model = load_model()
 
@@ -142,3 +142,4 @@ if submit:
     ax2.barh(FEATURE_NAMES, global_importance)
     ax2.set_title("SHAP-like Global Feature Importance")
     st.pyplot(fig2)
+
