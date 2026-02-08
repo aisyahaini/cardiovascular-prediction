@@ -64,7 +64,7 @@ def extract_probability(raw):
 # =========================
 # UI
 # =========================
-st.title("🫀 Cardiovascular Disease Prediction (ONNX)")
+st.title("🫀 Prediksi Manual Penyakit Cardiovascular (Single Input)")
 
 with st.form("input_form"):
     age = st.number_input("Age", 1, 120, 50)
@@ -162,3 +162,60 @@ if submit:
     df_imp.head(8).plot.barh(x="Feature", y="Impact", ax=ax, legend=False)
     ax.invert_yaxis()
     st.pyplot(fig)
+
+# =========================
+# INTERPRETASI HASIL (LIME-STYLE NARRATIVE)
+# =========================
+st.subheader("📝 Interpretasi Hasil Prediksi")
+
+# Confidence level
+if prob >= 0.75:
+    confidence = "tinggi"
+elif prob >= 0.5:
+    confidence = "sedang"
+else:
+    confidence = "rendah"
+
+# Pisahkan fitur berdasarkan kontribusi
+positive_features = df_imp[df_imp["Impact"] > 0].head(5).values.tolist()
+negative_features = df_imp[df_imp["Impact"] < 0].head(5).values.tolist()
+
+st.markdown(f"""
+Model **AdaBoost** mampu memprediksi risiko penyakit kardiovaskular (**CVD**)
+dengan tingkat keyakinan **{confidence}**
+(probabilitas **{prob:.2f}**).
+
+Berdasarkan **LIME (Local Interpretable Model-agnostic Explanation)**,
+prediksi pada **satu pasien** ini terutama dipengaruhi oleh perubahan
+nilai fitur di sekitar instance yang dianalisis.
+""")
+
+# Fitur yang meningkatkan risiko
+if positive_features:
+    st.markdown("🔺 **Fitur yang meningkatkan risiko:**")
+    for f, w in positive_features:
+        st.markdown(f"- **{f} > 0.00** (kontribusi: `{w:.3f}`)")
+
+# Fitur yang menurunkan risiko
+if negative_features:
+    st.markdown("🔻 **Fitur yang menurunkan risiko:**")
+    for f, w in negative_features:
+        st.markdown(f"- **{f} ≤ 0.00** (kontribusi: `{abs(w):.3f}`)")
+
+# =========================
+# KESIMPULAN ILMIAH
+# =========================
+st.subheader("📌 Kesimpulan Ilmiah")
+
+st.markdown("""
+- **LIME lebih unggul untuk analisis individual**, karena mampu menjelaskan
+  keputusan model secara spesifik pada satu pasien.
+- **SHAP tetap memiliki keunggulan**, terutama untuk analisis global,
+  karena konsisten secara teoritis dan stabil terhadap seluruh dataset.
+- Oleh karena itu, pada **single input**, pendekatan berbasis **LIME**
+  menjadi metode utama dalam interpretasi,
+  sementara **SHAP berfungsi sebagai pendukung interpretasi global model**.
+""")
+
+
+
