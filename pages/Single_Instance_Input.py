@@ -1,21 +1,14 @@
 import streamlit as st
 import numpy as np
-import onnxruntime as ort
-import matplotlib.pyplot as plt
 import pandas as pd
+import onnxruntime as ort
+import json
+import matplotlib.pyplot as plt
 
+# =========================
+# CONFIG
+# =========================
 st.set_page_config(page_title="CVD Prediction (ONNX)", layout="wide")
-
-# =========================
-# FEATURE ORDER (MANUAL & FIX)
-# =========================
-FEATURES = [
-    "age", "sex", "chest_pain_type", "resting_blood_pressure",
-    "cholesterol", "fasting_blood_sugar", "Restecg",
-    "max_heart_rate_achieved", "exercise_induced_angina",
-    "st_depression", "st_slope_type",
-    "num_major_vessels", "thalassemia_type"
-]
 
 # =========================
 # LOAD MODEL
@@ -27,74 +20,67 @@ def load_model():
         providers=["CPUExecutionProvider"]
     )
 
-    input_meta = sess.get_inputs()[0]
-    input_name = input_meta.name
-    input_dim = input_meta.shape[1]
+    with open("feature_names.json") as f:
+        feature_names = json.load(f)
 
-    # Dynamic shape safety
-    if isinstance(input_dim, str) or input_dim is None:
-        input_dim = len(FEATURES)
+    input_name = sess.get_inputs()[0].name
+    output_names = [o.name for o in sess.get_outputs()]
 
-    return sess, input_name, input_dim
+    return sess, feature_names, input_name, output_names
 
-session, INPUT_NAME, MODEL_DIM = load_model()
+
+session, FEATURE_NAMES, INPUT_NAME, OUTPUT_NAMES = load_model()
 
 # =========================
-# SUPER SAFE OUTPUT PARSER
+# SAFE PROBA EXTRACTOR
 # =========================
-def parse_output(outputs):
+def extract_probability(raw):
     """
-    Parse ONNX outputs safely.
-    Works even if model outputs ONLY label.
+    Universal ONNX probability extractor
+    Works for:
+    - numpy array
+    - list
+    - dict
     """
-    # ---------- LABEL ----------
-    label_raw = outputs[0]
-    label = int(np.asarray(label_raw).ravel()[0])
+    # Case 1: dict (sklearn AdaBoost often)
+    if isinstance(raw, dict):
+        return float(raw.get(1, list(raw.values())[-1]))
 
-    # ---------- PROBABILITY ----------
-    prob = None
+    # Case 2: list of dict
+    if isinstance(raw, list) and isinstance(raw[0], dict):
+        return float(raw[0].get(1, list(raw[0].values())[-1]))
 
-    if len(outputs) > 1:
-        raw = outputs[1]
+    # Case 3: numpy array
+    raw = np.asarray(raw)
 
-        try:
-            # dict output (rare but possible)
-            if isinstance(raw, dict):
-                vals = list(raw.values())
-                if len(vals) > 0 and isinstance(vals[-1], (float, int)):
-                    prob = float(vals[-1])
+    if raw.ndim == 2:
+        return float(raw[0, 1])
 
-            # numpy / list
-            elif raw is not None:
-                arr = np.asarray(raw).astype(np.float32)
+    if raw.ndim == 1:
+        return float(raw[0])
 
-                if arr.size > 0 and np.isfinite(arr.ravel()[0]):
-                    prob = float(arr.ravel()[0])
-
-        except Exception:
-            prob = None
-
-    return label, prob
+    raise ValueError("Unknown ONNX probability output format")
 
 # =========================
 # UI
 # =========================
-st.title("🫀 Cardiovascular Disease Prediction (ONNX)")
+st.title("🫀 Prediksi Manual Penyakit Cardiovascular (Single Input)")
 
 with st.form("input_form"):
     age = st.number_input("Age", 1, 120, 50)
-    sex = 1 if st.selectbox("Sex", ["Female", "Male"]) == "Male" else 0
+    sex = st.selectbox("Sex", ["Female", "Male"])
+    sex = 1 if sex == "Male" else 0
     cp = st.selectbox("Chest Pain Type", [0, 1, 2, 3])
-    trestbps = st.number_input("Resting Blood Pressure", 80, 250, 120)
+    trestbps = st.number_input("Resting BP", 80, 250, 120)
     chol = st.number_input("Cholesterol", 100, 600, 230)
     fbs = st.selectbox("Fasting Blood Sugar > 120", [0, 1])
     restecg = st.selectbox("Rest ECG", [0, 1, 2])
-    thalach = st.number_input("Max Heart Rate Achieved", 60, 220, 150)
-    exang = st.selectbox("Exercise Induced Angina", [0, 1])
+    thalach = st.number_input("Max Heart Rate", 60, 220, 150)
+    exang = st.selectbox("Exercise Angina", [0, 1])
     oldpeak = st.number_input("ST Depression", 0.0, 10.0, 1.0)
-    slope = st.selectbox("ST Slope", [0, 1, 2])
-    ca = st.selectbox("Number of Major Vessels", [0, 1, 2, 3])
-    thal = st.selectbox("Thalassemia", [0, 1, 2, 3])
+    slope = st.selectbox("Slope", [0, 1, 2])
+    ca = st.selectbox("CA", [0, 1, 2, 3])
+    thal = st.selectbox("Thal", [0, 1, 2, 3])
 
     submit = st.form_submit_button("Predict")
 
@@ -102,65 +88,136 @@ with st.form("input_form"):
 # PREDICTION
 # =========================
 if submit:
-    raw_input = np.array([
-        age, sex, cp, trestbps, chol, fbs, restecg,
-        thalach, exang, oldpeak, slope, ca, thal
-    ], dtype=np.float32)
+    input_data = pd.DataFrame([{
+        "age": age,
+        "sex": sex,
+        "chest_pain_type": cp,
+        "resting_blood_pressure": trestbps,
+        "cholesterol": chol,
+        "fasting_blood_sugar": fbs,
+        "Restecg": restecg,
+        "max_heart_rate_achieved": thalach,
+        "exercise_induced_angina": exang,
+        "st_depression": oldpeak,
+        "st_slope_type": slope,
+        "num_major_vessels": ca,
+        "thalassemia_type": thal
+    }])
 
-    # Match ONNX input dimension
-    X = np.zeros((1, MODEL_DIM), dtype=np.float32)
-    X[0, :min(len(raw_input), MODEL_DIM)] = raw_input[:MODEL_DIM]
+    for col in FEATURE_NAMES:
+        if col not in input_data:
+            input_data[col] = 0
 
-    outputs = session.run(None, {INPUT_NAME: X})
-    label, prob = parse_output(outputs)
+    X = (
+        input_data[FEATURE_NAMES]
+        .astype(np.float32)
+        .values
+    )
+
+    outputs = session.run(
+        OUTPUT_NAMES,
+        {INPUT_NAME: X}
+    )
+
+    # LABEL
+    pred = int(outputs[0][0])
+
+    # PROBABILITY (SAFE)
+    prob = extract_probability(outputs[1])
 
     # =========================
-    # RESULT
+    # OUTPUT
     # =========================
-    st.subheader("📊 Prediction Result")
+    st.subheader("📊 Result")
+    st.metric("CVD Probability", f"{prob:.2f}")
 
-    st.success("CVD Detected" if label == 1 else "No CVD Detected")
-
-    if prob is not None:
-        st.metric("Estimated Risk Score", f"{prob:.2f}")
-    else:
-        st.info("Model does not provide probability output (label-only ONNX model)")
+    st.success("CVD Detected" if pred == 1 else "No CVD Detected")
 
     # =========================
-    # FEATURE IMPACT (FAST & SAFE)
+    # SIMPLE FEATURE IMPACT
     # =========================
-    if prob is not None:
-        st.subheader("📈 Local Feature Impact (LIME-style Approximation)")
+    st.subheader("🧠 Feature Impact")
 
-        impacts = []
+    impacts = []
+    base_prob = prob
 
-        for i, name in enumerate(FEATURES):
-            if i >= MODEL_DIM:
-                continue
+    for i, name in enumerate(FEATURE_NAMES):
+        X_temp = X.copy()
+        X_temp[0, i] = 0
 
-            X_tmp = X.copy()
-            X_tmp[0, i] = 0
+        out = session.run(
+            OUTPUT_NAMES,
+            {INPUT_NAME: X_temp}
+        )
 
-            _, p2 = parse_output(
-                session.run(None, {INPUT_NAME: X_tmp})
-            )
+        new_prob = extract_probability(out[1])
+        impacts.append((name, base_prob - new_prob))
 
-            if p2 is not None:
-                impacts.append((name, prob - p2))
+    df_imp = pd.DataFrame(impacts, columns=["Feature", "Impact"]) \
+        .sort_values("Impact", ascending=False)
 
-        if impacts:
-            df = pd.DataFrame(
-                impacts, columns=["Feature", "Impact"]
-            ).sort_values("Impact", ascending=False)
+    st.dataframe(df_imp.head(8))
 
-            fig, ax = plt.subplots()
-            df.plot.barh(x="Feature", y="Impact", ax=ax, legend=False)
-            ax.invert_yaxis()
-            st.pyplot(fig)
+    fig, ax = plt.subplots()
+    df_imp.head(8).plot.barh(x="Feature", y="Impact", ax=ax, legend=False)
+    ax.invert_yaxis()
+    st.pyplot(fig)
 
-    st.markdown("""
-    **Catatan Ilmiah**  
-    Interpretasi dilakukan menggunakan *local perturbation analysis*  
-    yang secara konseptual setara dengan **LIME** dan kompatibel penuh  
-    dengan model **ONNX tanpa SHAP/LIME library**.
-    """)
+# =========================
+# INTERPRETASI HASIL (LIME-STYLE NARRATIVE)
+# =========================
+st.subheader("📝 Interpretasi Hasil Prediksi")
+
+# Confidence level
+if prob >= 0.75:
+    confidence = "tinggi"
+elif prob >= 0.5:
+    confidence = "sedang"
+else:
+    confidence = "rendah"
+
+# Pisahkan fitur berdasarkan kontribusi
+positive_features = df_imp[df_imp["Impact"] > 0].head(5).values.tolist()
+negative_features = df_imp[df_imp["Impact"] < 0].head(5).values.tolist()
+
+st.markdown(f"""
+Model **AdaBoost** mampu memprediksi risiko penyakit kardiovaskular (**CVD**)
+dengan tingkat keyakinan **{confidence}**
+(probabilitas **{prob:.2f}**).
+
+Berdasarkan **LIME (Local Interpretable Model-agnostic Explanation)**,
+prediksi pada **satu pasien** ini terutama dipengaruhi oleh perubahan
+nilai fitur di sekitar instance yang dianalisis.
+""")
+
+# Fitur yang meningkatkan risiko
+if positive_features:
+    st.markdown("🔺 **Fitur yang meningkatkan risiko:**")
+    for f, w in positive_features:
+        st.markdown(f"- **{f} > 0.00** (kontribusi: `{w:.3f}`)")
+
+# Fitur yang menurunkan risiko
+if negative_features:
+    st.markdown("🔻 **Fitur yang menurunkan risiko:**")
+    for f, w in negative_features:
+        st.markdown(f"- **{f} ≤ 0.00** (kontribusi: `{abs(w):.3f}`)")
+
+# =========================
+# KESIMPULAN ILMIAH
+# =========================
+st.subheader("📌 Kesimpulan Ilmiah")
+
+st.markdown("""
+- **LIME lebih unggul untuk analisis individual**, karena mampu menjelaskan
+  keputusan model secara spesifik pada satu pasien.
+- **SHAP tetap memiliki keunggulan**, terutama untuk analisis global,
+  karena konsisten secara teoritis dan stabil terhadap seluruh dataset.
+- Oleh karena itu, pada **single input**, pendekatan berbasis **LIME**
+  menjadi metode utama dalam interpretasi,
+  sementara **SHAP berfungsi sebagai pendukung interpretasi global model**.
+""")
+
+
+dari code diatas berikan tambahan analisis seperti shap tapi ga pake lib dari shap langsung, dan berikan analisis untuk hasil shap nya diletakkan sebelum feature impact atau lime. dan berikan semua code perbaikan untuk single input nya 
+
+
