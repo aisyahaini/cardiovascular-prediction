@@ -7,7 +7,7 @@ import pandas as pd
 st.set_page_config(page_title="CVD Prediction (ONNX)", layout="wide")
 
 # =========================
-# RAW FEATURES (UI LEVEL)
+# RAW FEATURES (UI)
 # =========================
 RAW_FEATURES = [
     "age", "sex", "chest_pain_type", "resting_blood_pressure",
@@ -18,7 +18,7 @@ RAW_FEATURES = [
 ]
 
 # =========================
-# LOAD ONNX MODEL
+# LOAD MODEL
 # =========================
 @st.cache_resource
 def load_model():
@@ -32,37 +32,50 @@ def load_model():
     input_dim = input_meta.shape[1]
 
     if isinstance(input_dim, str) or input_dim is None:
-        input_dim = None  # dynamic feature count
+        input_dim = None
 
-    output_names = [o.name for o in sess.get_outputs()]
+    return sess, input_name, input_dim
 
-    return sess, input_name, input_dim, output_names
-
-session, INPUT_NAME, MODEL_FEATURE_DIM, OUTPUT_NAMES = load_model()
+session, INPUT_NAME, MODEL_DIM = load_model()
 
 # =========================
-# SAFE OUTPUT PARSER
+# SAFE OUTPUT PARSER (FIXED)
 # =========================
 def parse_output(outputs):
-    if len(outputs) == 1:
-        label = int(outputs[0][0])
-        prob = None
-    else:
-        label = int(outputs[0][0])
+    """
+    Robust ONNX output parser
+    Supports:
+    - label only
+    - label + prob
+    - prob as scalar / 1D / 2D
+    """
+    label = int(outputs[0].ravel()[0])
+    prob = None
+
+    if len(outputs) > 1:
         raw = outputs[1]
 
         if isinstance(raw, dict):
             prob = float(raw.get(1, list(raw.values())[-1]))
+
         else:
             raw = np.asarray(raw)
-            prob = float(raw[0, -1])
+
+            if raw.ndim == 2:
+                prob = float(raw[0, -1])
+
+            elif raw.ndim == 1:
+                prob = float(raw[0])
+
+            elif raw.ndim == 0:
+                prob = float(raw)
 
     return label, prob
 
 # =========================
 # UI
 # =========================
-st.title("🫀 Cardiovascular Disease Prediction (ONNX – Stable)")
+st.title("🫀 Cardiovascular Disease Prediction (ONNX)")
 
 with st.form("input_form"):
     age = st.number_input("Age", 1, 120, 50)
@@ -90,15 +103,12 @@ if submit:
         thalach, exang, oldpeak, slope, ca, thal
     ], dtype=np.float32)
 
-    # =========================
-    # AUTO ADAPT FEATURE SIZE
-    # =========================
-    if MODEL_FEATURE_DIM is None:
+    # Adapt input size to ONNX
+    if MODEL_DIM is None:
         X = raw_input.reshape(1, -1)
     else:
-        X = np.zeros((1, MODEL_FEATURE_DIM), dtype=np.float32)
-        n = min(len(raw_input), MODEL_FEATURE_DIM)
-        X[0, :n] = raw_input[:n]
+        X = np.zeros((1, MODEL_DIM), dtype=np.float32)
+        X[0, :min(len(raw_input), MODEL_DIM)] = raw_input[:MODEL_DIM]
 
     outputs = session.run(None, {INPUT_NAME: X})
     label, prob = parse_output(outputs)
@@ -109,38 +119,42 @@ if submit:
     if prob is not None:
         st.metric("CVD Probability", f"{prob:.2f}")
     else:
-        st.info("Model does not output probability")
+        st.info("Model does not provide probability output")
 
     # =========================
-    # FEATURE IMPACT (FAST)
+    # FEATURE IMPACT (FAST & SAFE)
     # =========================
-    st.subheader("📈 Feature Impact (Local Approximation)")
-
     if prob is not None:
+        st.subheader("📈 Feature Impact (Local Approximation)")
+
         impacts = []
 
         for i, name in enumerate(RAW_FEATURES):
+            if i >= X.shape[1]:
+                continue
+
             X_tmp = X.copy()
-            if i < X_tmp.shape[1]:
-                X_tmp[0, i] = 0
+            X_tmp[0, i] = 0
 
             _, p2 = parse_output(
                 session.run(None, {INPUT_NAME: X_tmp})
             )
 
-            impacts.append((name, prob - p2))
+            if p2 is not None:
+                impacts.append((name, prob - p2))
 
-        df = pd.DataFrame(impacts, columns=["Feature", "Impact"]) \
-            .sort_values("Impact", ascending=False)
+        if impacts:
+            df = pd.DataFrame(impacts, columns=["Feature", "Impact"]) \
+                .sort_values("Impact", ascending=False)
 
-        fig, ax = plt.subplots()
-        df.plot.barh(x="Feature", y="Impact", ax=ax, legend=False)
-        ax.invert_yaxis()
-        st.pyplot(fig)
+            fig, ax = plt.subplots()
+            df.plot.barh(x="Feature", y="Impact", ax=ax, legend=False)
+            ax.invert_yaxis()
+            st.pyplot(fig)
 
     st.markdown("""
-    **Penjelasan:**
-    Visualisasi *Feature Impact* menggunakan pendekatan **local perturbation**  
+    **Catatan Ilmiah**  
+    Feature Impact dihitung menggunakan pendekatan *local perturbation*  
     yang secara konseptual setara dengan **LIME-style explanation**,  
     namun sepenuhnya kompatibel dengan **ONNX Runtime**.
     """)
