@@ -96,13 +96,30 @@ if uploaded_file:
         "country": "dataset"
     }
 
+    # =====================
+    # RENAME KE FEATURE MODEL
+    # =====================
     X_model = X_raw.rename(columns={v: k for k, v in shap_to_df_mapping.items()})
-
+    
+    # =====================
+    # DROP NON-NUMERIC (AMAN UNTUK DEPLOYMENT)
+    # =====================
+    X_model = X_model.select_dtypes(include=[np.number])
+    
+    # =====================
+    # ALIGN DENGAN FEATURE MODEL
+    # =====================
     for col in FEATURE_NAMES:
         if col not in X_model.columns:
             X_model[col] = 0
+    
+    X_model = (
+        X_model[FEATURE_NAMES]
+        .apply(pd.to_numeric, errors="coerce")
+        .fillna(0)
+        .astype(np.float32)
+    )
 
-    X_model = X_model[FEATURE_NAMES].fillna(0).astype(np.float32)
 
     # =====================
     # PREDICTION
@@ -194,3 +211,4 @@ if uploaded_file:
 
 else:
     st.info("📂 Silakan upload file CSV terlebih dahulu.")
+
