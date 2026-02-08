@@ -6,9 +6,10 @@ import lime.lime_tabular
 import matplotlib.pyplot as plt
 import json
 from collections import defaultdict
+from scipy.stats import spearmanr, kendalltau
 
 # =====================================================
-# HELPER
+# HELPER FUNCTIONS
 # =====================================================
 def extract_proba(outputs):
     proba_raw = outputs[1]
@@ -23,7 +24,6 @@ def extract_proba(outputs):
 
 
 def extract_feature_name(lime_rule, feature_names):
-    """Ambil nama fitur asli dari rule LIME"""
     for fname in feature_names:
         if fname in lime_rule:
             return fname
@@ -31,14 +31,15 @@ def extract_feature_name(lime_rule, feature_names):
 
 
 # =====================================================
-# LOAD MODEL
+# LOAD ONNX MODEL
 # =====================================================
 @st.cache_resource
-def load_onnx_model():
+def load_model():
     session = ort.InferenceSession(
         "adaboost_model.onnx",
         providers=["CPUExecutionProvider"]
     )
+
     with open("feature_names.json") as f:
         feature_names = json.load(f)
 
@@ -50,23 +51,33 @@ def load_onnx_model():
     )
 
 
-session, FEATURE_NAMES, INPUT_NAME, OUTPUT_NAMES = load_onnx_model()
+session, FEATURE_NAMES, INPUT_NAME, OUTPUT_NAMES = load_model()
 
-st.title("📂 Prediksi Penyakit Cardiovascular (ONNX + XAI)")
+# =====================================================
+# STREAMLIT UI
+# =====================================================
+st.set_page_config(page_title="CVD Prediction + XAI", layout="wide")
+st.title("📂 Cardiovascular Disease Prediction (ONNX + XAI)")
 
 uploaded_file = st.file_uploader("Upload file CSV", type=["csv"])
 
 # =====================================================
-# MAIN
+# MAIN LOGIC
 # =====================================================
 if uploaded_file:
 
     # =====================
-    # LOAD & PREPROCESS
+    # LOAD DATA
     # =====================
     df = pd.read_csv(uploaded_file)
     df.columns = df.columns.str.strip()
 
+    st.subheader("📊 Preview Data")
+    st.dataframe(df.head())
+
+    # =====================
+    # BASIC PREPROCESSING
+    # =====================
     mapping_binary = {
         "sex": {"male": 1, "female": 0},
         "exang": {"yes": 1, "no": 0},
@@ -97,22 +108,18 @@ if uploaded_file:
     }
 
     # =====================
-    # RENAME KE FEATURE MODEL
+    # RENAME → MODEL FEATURE
     # =====================
     X_model = X_raw.rename(columns={v: k for k, v in shap_to_df_mapping.items()})
-    
-    # =====================
-    # DROP NON-NUMERIC (AMAN UNTUK DEPLOYMENT)
-    # =====================
+
+    # DROP NON-NUMERIC (AMAN)
     X_model = X_model.select_dtypes(include=[np.number])
-    
-    # =====================
-    # ALIGN DENGAN FEATURE MODEL
-    # =====================
+
+    # ALIGN FEATURE ORDER
     for col in FEATURE_NAMES:
         if col not in X_model.columns:
             X_model[col] = 0
-    
+
     X_model = (
         X_model[FEATURE_NAMES]
         .apply(pd.to_numeric, errors="coerce")
@@ -120,26 +127,29 @@ if uploaded_file:
         .astype(np.float32)
     )
 
-
     # =====================
     # PREDICTION
     # =====================
-    outputs = session.run(OUTPUT_NAMES, {INPUT_NAME: X_model.values})
+    outputs = session.run(
+        OUTPUT_NAMES,
+        {INPUT_NAME: X_model.values}
+    )
+
     df["prediction"] = outputs[0]
     df["probability"] = extract_proba(outputs)[:, 1]
 
-    st.subheader("📌 Hasil Prediksi")
+    st.subheader("📌 Prediction Result")
     st.dataframe(df.head())
 
     # =====================================================
-    # SHAP-LIKE GLOBAL (DITAMPILKAN DULU)
+    # LIME EXPLAINER (USED FOR BOTH)
     # =====================================================
-    st.subheader("📊 Global Feature Importance (SHAP-like)")
-
     def onnx_predict_proba(x):
-        return extract_proba(
-            session.run(OUTPUT_NAMES, {INPUT_NAME: x.astype(np.float32)})
+        outputs = session.run(
+            OUTPUT_NAMES,
+            {INPUT_NAME: x.astype(np.float32)}
         )
+        return extract_proba(outputs)
 
     lime_explainer = lime.lime_tabular.LimeTabularExplainer(
         training_data=X_model.values,
@@ -147,6 +157,11 @@ if uploaded_file:
         class_names=["No CVD", "CVD"],
         mode="classification"
     )
+
+    # =====================================================
+    # SHAP-LIKE GLOBAL (FIRST)
+    # =====================================================
+    st.subheader("📊 Global Feature Importance (SHAP-like)")
 
     feature_importance = defaultdict(list)
 
@@ -162,9 +177,7 @@ if uploaded_file:
             if fname:
                 feature_importance[fname].append(abs(weight))
 
-    shap_like = {
-        f: np.mean(w) for f, w in feature_importance.items()
-    }
+    shap_like = {f: np.mean(w) for f, w in feature_importance.items()}
 
     shap_df = (
         pd.DataFrame({
@@ -172,25 +185,20 @@ if uploaded_file:
             "Mean_Contribution": shap_like.values()
         })
         .sort_values("Mean_Contribution", ascending=False)
+        .reset_index(drop=True)
     )
 
     st.dataframe(shap_df)
 
     fig, ax = plt.subplots(figsize=(9, 6))
     ax.barh(shap_df["Feature"], shap_df["Mean_Contribution"])
-
-    for i, v in enumerate(shap_df["Mean_Contribution"]):
-        ax.text(v, i, f"{v:.4f}", va="center")
-
     ax.set_xlabel("Mean |Contribution|")
     ax.set_title("Global Feature Importance (SHAP-like)")
     ax.invert_yaxis()
-    ax.set_facecolor("white")
-
     st.pyplot(fig)
 
     # =====================================================
-    # LIME LOCAL (SETELAH SHAP)
+    # LIME LOCAL
     # =====================================================
     st.subheader("🧩 LIME – Local Explanation")
 
@@ -202,13 +210,67 @@ if uploaded_file:
         num_features=len(FEATURE_NAMES)
     )
 
-    html = exp_local.as_html().replace(
-        "<body>",
-        "<body style='background-color:white;'>"
+    st.components.v1.html(
+        exp_local.as_html(),
+        height=650,
+        scrolling=True
     )
 
-    st.components.v1.html(html, height=650, scrolling=True)
+    # =====================================================
+    # LIME LOCAL → IMPORTANCE DF
+    # =====================================================
+    lime_local_imp = defaultdict(float)
+
+    for rule, weight in exp_local.as_list():
+        fname = extract_feature_name(rule, FEATURE_NAMES)
+        if fname:
+            lime_local_imp[fname] += abs(weight)
+
+    lime_local_df = (
+        pd.DataFrame({
+            "Feature": lime_local_imp.keys(),
+            "LIME_Local": lime_local_imp.values()
+        })
+        .sort_values("LIME_Local", ascending=False)
+        .reset_index(drop=True)
+    )
+
+    # =====================================================
+    # SHAP vs LIME COMPARISON
+    # =====================================================
+    st.subheader("📐 SHAP-like vs LIME Consistency")
+
+    comparison_df = shap_df.merge(
+        lime_local_df,
+        on="Feature",
+        how="inner"
+    )
+
+    comparison_df["SHAP_Rank"] = comparison_df["Mean_Contribution"].rank(ascending=False)
+    comparison_df["LIME_Rank"] = comparison_df["LIME_Local"].rank(ascending=False)
+
+    spearman_corr, spearman_p = spearmanr(
+        comparison_df["SHAP_Rank"],
+        comparison_df["LIME_Rank"]
+    )
+
+    kendall_corr, kendall_p = kendalltau(
+        comparison_df["SHAP_Rank"],
+        comparison_df["LIME_Rank"]
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.metric("Spearman ρ", f"{spearman_corr:.3f}")
+        st.caption(f"p-value: {spearman_p:.4e}")
+
+    with col2:
+        st.metric("Kendall τ", f"{kendall_corr:.3f}")
+        st.caption(f"p-value: {kendall_p:.4e}")
+
+    st.subheader("📋 Feature Ranking Comparison")
+    st.dataframe(comparison_df.sort_values("SHAP_Rank"))
 
 else:
     st.info("📂 Silakan upload file CSV terlebih dahulu.")
-
