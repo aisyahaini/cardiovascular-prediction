@@ -283,6 +283,12 @@ if uploaded_file:
         st.metric("Kendall τ", f"{kendall_corr:.3f}")
         st.caption(f"p-value: {kendall_p:.4e}")
 
+    st.markdown(""" 
+    Hasil perbandingan nilai Spearman dan Kendall Tau di atas menunjukkan
+    tingkat konsistensi yang tinggi antara peringkat fitur yang dihasilkan
+    oleh metode SHAP dan LIME.
+    """)
+
     st.subheader("📋 Feature Ranking Comparison")
     st.dataframe(comparison_df.sort_values("SHAP_Rank"))
 
@@ -299,6 +305,7 @@ if uploaded_file:
 
 else:
     st.info("📂 Silakan upload file CSV terlebih dahulu.")
+
 
 
 
