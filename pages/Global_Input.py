@@ -210,11 +210,25 @@ if uploaded_file:
         num_features=len(FEATURE_NAMES)
     )
 
+    lime_html = exp_local.as_html()
+
+    lime_html = lime_html.replace(
+        "<body>",
+        """
+        <body style="
+            background-color: white;
+            color: black;
+            font-family: Arial, sans-serif;
+        ">
+        """
+    )
+    
     st.components.v1.html(
-        exp_local.as_html(),
+        lime_html,
         height=650,
         scrolling=True
     )
+
 
     # =====================================================
     # LIME LOCAL → IMPORTANCE DF
@@ -285,4 +299,5 @@ if uploaded_file:
 
 else:
     st.info("📂 Silakan upload file CSV terlebih dahulu.")
+
 
