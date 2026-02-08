@@ -176,4 +176,3 @@ if submit:
       terhadap perubahan kecil pada fitur pasien.
     - Kombinasi keduanya memberikan interpretasi **global-context + local-decision**.
     """)
-
