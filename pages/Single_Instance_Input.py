@@ -219,17 +219,18 @@ if submit:
     rho, _ = spearmanr(comp["SHAP_Rank"], comp["LIME_Rank"])
     tau, _ = kendalltau(comp["SHAP_Rank"], comp["LIME_Rank"])
 
-    c1, c2 = st.columns(2)
-    c1.metric("Spearman ρ", f"{rho:.3f}")
-    c2.metric("Kendall τ", f"{tau:.3f}")
-
-    st.dataframe(comp.sort_values("SHAP_Rank"))
     st.markdown(""" 
     Hasil perbandingan nilai Spearman dan Kendall Tau di atas menunjukkan
     tingkat konsistensi yang tinggi antara peringkat fitur yang dihasilkan
     oleh metode SHAP-like dan LIME-like
     """)
+    
+    c1, c2 = st.columns(2)
+    c1.metric("Spearman ρ", f"{rho:.3f}")
+    c2.metric("Kendall τ", f"{tau:.3f}")
 
+    st.dataframe(comp.sort_values("SHAP_Rank"))
+    
     # =====================
     # KESIMPULAN ILMIAH
     # =====================
@@ -243,6 +244,7 @@ if submit:
     - Oleh karena itu, pada **single input**, LIME menjadi metode utama,
       sementara SHAP berfungsi sebagai pendukung interpretasi global model.
     """)
+
 
 
 
