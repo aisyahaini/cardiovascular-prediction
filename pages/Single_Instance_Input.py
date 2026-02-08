@@ -210,7 +210,7 @@ if submit:
     # =====================================================
     # CONSISTENCY ANALYSIS
     # =====================================================
-    st.markdown("📐 Konsistensi SHAP-like vs LIME-like")
+    st.markdown("📐 Konsistensi SHAP vs LIME")
 
     comp = shap_df.merge(lime_df, on="Feature")
     comp["SHAP_Rank"] = comp["SHAP_Global"].rank(ascending=False)
@@ -224,6 +224,11 @@ if submit:
     c2.metric("Kendall τ", f"{tau:.3f}")
 
     st.dataframe(comp.sort_values("SHAP_Rank"))
+    st.markdown(""" 
+    Hasil perbandingan nilai Spearman dan Kendall Tau di atas menunjukkan
+    tingkat konsistensi yang tinggi antara peringkat fitur yang dihasilkan
+    oleh metode SHAP-like dan LIME-like
+    """)
 
     # =====================
     # KESIMPULAN ILMIAH
@@ -238,6 +243,7 @@ if submit:
     - Oleh karena itu, pada **single input**, LIME menjadi metode utama,
       sementara SHAP berfungsi sebagai pendukung interpretasi global model.
     """)
+
 
 
 
