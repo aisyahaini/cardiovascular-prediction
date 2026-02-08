@@ -226,7 +226,7 @@ if submit:
     st.markdown(""" 
     Hasil perbandingan nilai Spearman dan Kendall Tau di atas menunjukkan
     tingkat konsistensi yang tinggi antara peringkat fitur yang dihasilkan
-    oleh metode SHAP-like dan LIME-like
+    oleh metode SHAP dan LIME.
     """)
 
     st.dataframe(comp.sort_values("SHAP_Rank"))
@@ -244,6 +244,7 @@ if submit:
     - Oleh karena itu, pada **single input**, LIME menjadi metode utama,
       sementara SHAP berfungsi sebagai pendukung interpretasi global model.
     """)
+
 
 
 
