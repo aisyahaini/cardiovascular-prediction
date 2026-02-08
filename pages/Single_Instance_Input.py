@@ -123,20 +123,26 @@ if submit:
     st.metric("Prediksi", "CVD" if pred else "No CVD")
 
     # =====================================================
-    # LIME-LIKE LOCAL EXPLANATION (PERTURBASI)
+    # LIME-LIKE LOCAL EXPLANATION (FIXED)
     # =====================================================
     st.subheader("🧩 LIME-like Local Explanation")
-
-    delta = 0.1
+    
     base_prob = prob
     lime_scores = {}
-
+    
     for i, feat in enumerate(FEATURE_NAMES):
         x_p = x_input.copy()
+    
+        val = x_input[0, i]
+    
+        # ✅ ADAPTIVE DELTA (KRUSIAL)
+        delta = max(1.0, abs(val) * 0.2)
+    
         x_p[0, i] += delta
-        new_prob = predict_proba(x_p)[0]
+        new_prob = float(predict_proba(x_p)[0])
+    
         lime_scores[feat] = abs(new_prob - base_prob)
-
+    
     lime_df = (
         pd.DataFrame({
             "Feature": lime_scores.keys(),
@@ -144,35 +150,41 @@ if submit:
         })
         .sort_values("LIME_Local", ascending=False)
     )
-
+    
     st.dataframe(lime_df)
-
+    
     fig1, ax1 = plt.subplots(figsize=(8, 6))
     ax1.barh(lime_df["Feature"], lime_df["LIME_Local"])
     ax1.set_title("LIME-like Local Feature Importance")
     ax1.invert_yaxis()
-    ax1.set_facecolor("white")
     st.pyplot(fig1)
 
+
     # =====================================================
-    # SHAP-LIKE GLOBAL EXPLANATION (SAMPLING)
+    # SHAP-LIKE GLOBAL EXPLANATION (FIXED)
     # =====================================================
     st.subheader("📊 SHAP-like Global Explanation")
-
-    n_samples = 100
+    
+    n_samples = 50
     shap_scores = {f: [] for f in FEATURE_NAMES}
-
+    
     for _ in range(n_samples):
-        noise = np.random.normal(0, 0.1, size=x_input.shape)
+        noise = np.random.normal(0, 1.0, size=x_input.shape)
         x_s = x_input + noise
-        base = predict_proba(x_s)[0]
-
+    
+        base = float(predict_proba(x_s)[0])
+    
         for i, feat in enumerate(FEATURE_NAMES):
             x_p = x_s.copy()
+    
+            val = x_s[0, i]
+            delta = max(1.0, abs(val) * 0.2)
+    
             x_p[0, i] += delta
-            new_p = predict_proba(x_p)[0]
+            new_p = float(predict_proba(x_p)[0])
+    
             shap_scores[feat].append(abs(new_p - base))
-
+    
     shap_df = (
         pd.DataFrame({
             "Feature": shap_scores.keys(),
@@ -180,15 +192,15 @@ if submit:
         })
         .sort_values("SHAP_Global", ascending=False)
     )
-
+    
     st.dataframe(shap_df)
-
+    
     fig2, ax2 = plt.subplots(figsize=(8, 6))
     ax2.barh(shap_df["Feature"], shap_df["SHAP_Global"])
     ax2.set_title("SHAP-like Global Feature Importance")
     ax2.invert_yaxis()
-    ax2.set_facecolor("white")
     st.pyplot(fig2)
+
 
     # =====================================================
     # CONSISTENCY ANALYSIS
@@ -207,3 +219,4 @@ if submit:
     c2.metric("Kendall τ", f"{tau:.3f}")
 
     st.dataframe(comp.sort_values("SHAP_Rank"))
+
