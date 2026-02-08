@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 st.set_page_config(page_title="CVD Prediction (ONNX)", layout="wide")
 
 # =========================
-# LOAD MODEL
+# LOAD MODEL & BASELINE
 # =========================
 @st.cache_resource
 def load_model():
@@ -23,34 +23,27 @@ def load_model():
     with open("feature_names.json") as f:
         feature_names = json.load(f)
 
+    with open("feature_baseline.json") as f:
+        baseline = json.load(f)
+
     input_name = sess.get_inputs()[0].name
     output_names = [o.name for o in sess.get_outputs()]
 
-    return sess, feature_names, input_name, output_names
+    return sess, feature_names, baseline, input_name, output_names
 
 
-session, FEATURE_NAMES, INPUT_NAME, OUTPUT_NAMES = load_model()
+session, FEATURE_NAMES, BASELINE, INPUT_NAME, OUTPUT_NAMES = load_model()
 
 # =========================
 # SAFE PROBA EXTRACTOR
 # =========================
 def extract_probability(raw):
-    """
-    Universal ONNX probability extractor
-    Works for:
-    - numpy array
-    - list
-    - dict
-    """
-    # Case 1: dict (sklearn AdaBoost often)
     if isinstance(raw, dict):
         return float(raw.get(1, list(raw.values())[-1]))
 
-    # Case 2: list of dict
     if isinstance(raw, list) and isinstance(raw[0], dict):
         return float(raw[0].get(1, list(raw[0].values())[-1]))
 
-    # Case 3: numpy array
     raw = np.asarray(raw)
 
     if raw.ndim == 2:
@@ -64,12 +57,11 @@ def extract_probability(raw):
 # =========================
 # UI
 # =========================
-st.title("🫀 Prediksi Manual Penyakit Cardiovascular (Single Input)")
+st.title("🫀 Prediksi Penyakit Cardiovascular (Single Input – ONNX)")
 
 with st.form("input_form"):
     age = st.number_input("Age", 1, 120, 50)
-    sex = st.selectbox("Sex", ["Female", "Male"])
-    sex = 1 if sex == "Male" else 0
+    sex = 1 if st.selectbox("Sex", ["Female", "Male"]) == "Male" else 0
     cp = st.selectbox("Chest Pain Type", [0, 1, 2, 3])
     trestbps = st.number_input("Resting BP", 80, 250, 120)
     chol = st.number_input("Cholesterol", 100, 600, 230)
@@ -108,114 +100,80 @@ if submit:
         if col not in input_data:
             input_data[col] = 0
 
-    X = (
-        input_data[FEATURE_NAMES]
-        .astype(np.float32)
-        .values
-    )
+    X = input_data[FEATURE_NAMES].astype(np.float32).values
 
-    outputs = session.run(
-        OUTPUT_NAMES,
-        {INPUT_NAME: X}
-    )
-
-    # LABEL
+    outputs = session.run(OUTPUT_NAMES, {INPUT_NAME: X})
     pred = int(outputs[0][0])
-
-    # PROBABILITY (SAFE)
     prob = extract_probability(outputs[1])
 
-    # =========================
-    # OUTPUT
-    # =========================
-    st.subheader("📊 Result")
-    st.metric("CVD Probability", f"{prob:.2f}")
-
+    st.subheader("📊 Hasil Prediksi")
+    st.metric("Probabilitas CVD", f"{prob:.2f}")
     st.success("CVD Detected" if pred == 1 else "No CVD Detected")
 
-    # =========================
-    # SIMPLE FEATURE IMPACT
-    # =========================
-    st.subheader("🧠 Feature Impact")
+    # ==================================================
+    # SHAP-STYLE APPROXIMATION (BASELINE COMPARISON)
+    # ==================================================
+    st.subheader("📈 SHAP-style Feature Contribution (Approximation)")
 
-    impacts = []
-    base_prob = prob
+    baseline_df = pd.DataFrame([BASELINE])[FEATURE_NAMES].astype(np.float32)
+    X_base = baseline_df.values
+
+    base_out = session.run(OUTPUT_NAMES, {INPUT_NAME: X_base})
+    base_prob = extract_probability(base_out[1])
+
+    shap_like = []
+
+    for i, name in enumerate(FEATURE_NAMES):
+        X_mix = X_base.copy()
+        X_mix[0, i] = X[0, i]
+
+        out = session.run(OUTPUT_NAMES, {INPUT_NAME: X_mix})
+        p = extract_probability(out[1])
+
+        shap_like.append((name, p - base_prob))
+
+    df_shap = pd.DataFrame(shap_like, columns=["Feature", "SHAP_like"]) \
+        .sort_values("SHAP_like", ascending=False)
+
+    fig, ax = plt.subplots()
+    df_shap.head(8).plot.barh(x="Feature", y="SHAP_like", ax=ax, legend=False)
+    ax.invert_yaxis()
+    st.pyplot(fig)
+
+    # ==================================================
+    # LIME-STYLE LOCAL PERTURBATION
+    # ==================================================
+    st.subheader("🧠 LIME-style Local Feature Impact")
+
+    lime_impacts = []
 
     for i, name in enumerate(FEATURE_NAMES):
         X_temp = X.copy()
         X_temp[0, i] = 0
 
-        out = session.run(
-            OUTPUT_NAMES,
-            {INPUT_NAME: X_temp}
-        )
-
+        out = session.run(OUTPUT_NAMES, {INPUT_NAME: X_temp})
         new_prob = extract_probability(out[1])
-        impacts.append((name, base_prob - new_prob))
 
-    df_imp = pd.DataFrame(impacts, columns=["Feature", "Impact"]) \
+        lime_impacts.append((name, prob - new_prob))
+
+    df_lime = pd.DataFrame(lime_impacts, columns=["Feature", "Impact"]) \
         .sort_values("Impact", ascending=False)
 
-    st.dataframe(df_imp.head(8))
+    fig2, ax2 = plt.subplots()
+    df_lime.head(8).plot.barh(x="Feature", y="Impact", ax=ax2, legend=False)
+    ax2.invert_yaxis()
+    st.pyplot(fig2)
 
-    fig, ax = plt.subplots()
-    df_imp.head(8).plot.barh(x="Feature", y="Impact", ax=ax, legend=False)
-    ax.invert_yaxis()
-    st.pyplot(fig)
+    # ==================================================
+    # INTERPRETASI
+    # ==================================================
+    st.subheader("📝 Interpretasi Ilmiah")
 
-# =========================
-# INTERPRETASI HASIL (LIME-STYLE NARRATIVE)
-# =========================
-st.subheader("📝 Interpretasi Hasil Prediksi")
-
-# Confidence level
-if prob >= 0.75:
-    confidence = "tinggi"
-elif prob >= 0.5:
-    confidence = "sedang"
-else:
-    confidence = "rendah"
-
-# Pisahkan fitur berdasarkan kontribusi
-positive_features = df_imp[df_imp["Impact"] > 0].head(5).values.tolist()
-negative_features = df_imp[df_imp["Impact"] < 0].head(5).values.tolist()
-
-st.markdown(f"""
-Model **AdaBoost** mampu memprediksi risiko penyakit kardiovaskular (**CVD**)
-dengan tingkat keyakinan **{confidence}**
-(probabilitas **{prob:.2f}**).
-
-Berdasarkan **LIME (Local Interpretable Model-agnostic Explanation)**,
-prediksi pada **satu pasien** ini terutama dipengaruhi oleh perubahan
-nilai fitur di sekitar instance yang dianalisis.
-""")
-
-# Fitur yang meningkatkan risiko
-if positive_features:
-    st.markdown("🔺 **Fitur yang meningkatkan risiko:**")
-    for f, w in positive_features:
-        st.markdown(f"- **{f} > 0.00** (kontribusi: `{w:.3f}`)")
-
-# Fitur yang menurunkan risiko
-if negative_features:
-    st.markdown("🔻 **Fitur yang menurunkan risiko:**")
-    for f, w in negative_features:
-        st.markdown(f"- **{f} ≤ 0.00** (kontribusi: `{abs(w):.3f}`)")
-
-# =========================
-# KESIMPULAN ILMIAH
-# =========================
-st.subheader("📌 Kesimpulan Ilmiah")
-
-st.markdown("""
-- **LIME lebih unggul untuk analisis individual**, karena mampu menjelaskan
-  keputusan model secara spesifik pada satu pasien.
-- **SHAP tetap memiliki keunggulan**, terutama untuk analisis global,
-  karena konsisten secara teoritis dan stabil terhadap seluruh dataset.
-- Oleh karena itu, pada **single input**, pendekatan berbasis **LIME**
-  menjadi metode utama dalam interpretasi,
-  sementara **SHAP berfungsi sebagai pendukung interpretasi global model**.
-""")
-
-
+    st.markdown(f"""
+    - Analisis **SHAP-style** menunjukkan bagaimana nilai fitur pasien
+      **menyimpang dari kondisi populasi rata-rata**.
+    - Analisis **LIME-style** menjelaskan **sensitivitas prediksi lokal**
+      terhadap perubahan kecil pada fitur pasien.
+    - Kombinasi keduanya memberikan interpretasi **global-context + local-decision**.
+    """)
 
