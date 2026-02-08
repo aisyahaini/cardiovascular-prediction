@@ -28,7 +28,7 @@ def load_model():
 session, FEATURE_NAMES, INPUT_NAME, OUTPUT_NAMES = load_model()
 
 # =====================================================
-# SAFE PROBABILITY FUNCTION
+# SAFE PREDICT PROBA
 # =====================================================
 def predict_proba(x):
     outputs = session.run(
@@ -38,28 +38,36 @@ def predict_proba(x):
 
     proba_raw = outputs[1]
 
-    if isinstance(proba_raw, list):
+    # case: list of dict (sklearn-style ONNX)
+    if isinstance(proba_raw, list) and isinstance(proba_raw[0], dict):
         return np.array([p[1] for p in proba_raw])
 
     proba_raw = np.array(proba_raw)
-    return proba_raw[:, 1] if proba_raw.ndim == 2 else proba_raw
+
+    if proba_raw.ndim == 1:
+        return proba_raw
+
+    return proba_raw[:, 1]
 
 # =====================================================
 # UI
 # =====================================================
 st.set_page_config(layout="wide")
-st.title("🫀 CVD Prediction – Single Patient + XAI")
+st.title("🫀 Prediksi Penyakit Cardiovascular – Single Input + XAI")
 
 # =====================================================
-# FORM INPUT
+# INPUT FORM
 # =====================================================
 with st.form("input_form"):
+    st.subheader("🧾 Input Data Pasien")
+
     age = st.number_input("Usia", 1, 120, 45)
 
     sex_label = st.selectbox("Jenis Kelamin", ["Perempuan", "Laki-laki"])
     sex = 1 if sex_label == "Laki-laki" else 0
 
-    dataset = st.selectbox("Dataset", [0, 1, 2, 3])
+    country = st.selectbox("Dataset / Country", [0, 1, 2, 3])
+
     cp = st.selectbox("Chest Pain Type", [0, 1, 2, 3])
     trestbps = st.number_input("Tekanan Darah Istirahat", 80, 250, 120)
     chol = st.number_input("Kolesterol", 100, 600, 230)
@@ -75,13 +83,17 @@ with st.form("input_form"):
     submit = st.form_submit_button("🔍 Prediksi")
 
 # =====================================================
-# RUN MODEL
+# MAIN LOGIC
 # =====================================================
 if submit:
+
+    # =====================
+    # BUILD INPUT DICT (NAMA HARUS SAMA DENGAN MODEL)
+    # =====================
     input_dict = {
         "age": age,
         "sex": sex,
-        "dataset": dataset,
+        "country": country,   # ✅ FIX UTAMA
         "cp": cp,
         "trestbps": trestbps,
         "chol": chol,
@@ -95,8 +107,14 @@ if submit:
         "thal": thal
     }
 
-    x_input = np.array([[input_dict[f] for f in FEATURE_NAMES]])
+    # =====================
+    # ALIGN KE FEATURE_NAMES (ANTI KeyError)
+    # =====================
+    x_input = np.array([[input_dict.get(f, 0) for f in FEATURE_NAMES]])
 
+    # =====================
+    # PREDICTION
+    # =====================
     prob = float(predict_proba(x_input)[0])
     pred = int(prob >= 0.5)
 
@@ -105,7 +123,7 @@ if submit:
     st.metric("Prediksi", "CVD" if pred else "No CVD")
 
     # =====================================================
-    # LIME-LIKE LOCAL EXPLANATION
+    # LIME-LIKE LOCAL EXPLANATION (PERTURBASI)
     # =====================================================
     st.subheader("🧩 LIME-like Local Explanation")
 
@@ -116,23 +134,28 @@ if submit:
     for i, feat in enumerate(FEATURE_NAMES):
         x_p = x_input.copy()
         x_p[0, i] += delta
-        lime_scores[feat] = abs(predict_proba(x_p)[0] - base_prob)
+        new_prob = predict_proba(x_p)[0]
+        lime_scores[feat] = abs(new_prob - base_prob)
 
     lime_df = (
-        pd.DataFrame(lime_scores.items(), columns=["Feature", "LIME_Local"])
+        pd.DataFrame({
+            "Feature": lime_scores.keys(),
+            "LIME_Local": lime_scores.values()
+        })
         .sort_values("LIME_Local", ascending=False)
     )
 
-    st.dataframe(lime_df, use_container_width=True)
+    st.dataframe(lime_df)
 
     fig1, ax1 = plt.subplots(figsize=(8, 6))
     ax1.barh(lime_df["Feature"], lime_df["LIME_Local"])
     ax1.set_title("LIME-like Local Feature Importance")
     ax1.invert_yaxis()
+    ax1.set_facecolor("white")
     st.pyplot(fig1)
 
     # =====================================================
-    # SHAP-LIKE GLOBAL (SAMPLING)
+    # SHAP-LIKE GLOBAL EXPLANATION (SAMPLING)
     # =====================================================
     st.subheader("📊 SHAP-like Global Explanation")
 
@@ -147,7 +170,8 @@ if submit:
         for i, feat in enumerate(FEATURE_NAMES):
             x_p = x_s.copy()
             x_p[0, i] += delta
-            shap_scores[feat].append(abs(predict_proba(x_p)[0] - base))
+            new_p = predict_proba(x_p)[0]
+            shap_scores[feat].append(abs(new_p - base))
 
     shap_df = (
         pd.DataFrame({
@@ -157,12 +181,13 @@ if submit:
         .sort_values("SHAP_Global", ascending=False)
     )
 
-    st.dataframe(shap_df, use_container_width=True)
+    st.dataframe(shap_df)
 
     fig2, ax2 = plt.subplots(figsize=(8, 6))
     ax2.barh(shap_df["Feature"], shap_df["SHAP_Global"])
     ax2.set_title("SHAP-like Global Feature Importance")
     ax2.invert_yaxis()
+    ax2.set_facecolor("white")
     st.pyplot(fig2)
 
     # =====================================================
@@ -181,4 +206,4 @@ if submit:
     c1.metric("Spearman ρ", f"{rho:.3f}")
     c2.metric("Kendall τ", f"{tau:.3f}")
 
-    st.dataframe(comp.sort_values("SHAP_Rank"), use_container_width=True)
+    st.dataframe(comp.sort_values("SHAP_Rank"))
