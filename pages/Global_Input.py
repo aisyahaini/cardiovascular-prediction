@@ -272,5 +272,30 @@ if uploaded_file:
     st.subheader("📋 Feature Ranking Comparison")
     st.dataframe(comparison_df.sort_values("SHAP_Rank"))
 
+# =====================
+        # KESIMPULAN
+        # =====================
+        top5 = corr_df.head(5).index.tolist()
+
+        st.subheader("📌 Kesimpulan Akhir")
+        st.markdown(f"""
+        Berdasarkan analisis:
+
+        **5 fitur teratas yang paling berkaitan dengan penyakit kardiovaskular**
+        (berdasarkan Spearman & Kendall):
+
+        1. {top5[0]}
+        2. {top5[1]}
+        3. {top5[2]}
+        4. {top5[3]}
+        5. {top5[4]}
+
+        **Kesimpulan:**
+        - Model AdaBoost mampu memprediksi risiko CVD dengan baik.
+        - **SHAP lebih unggul untuk analisis global** karena mengevaluasi seluruh data.
+        - **LIME lebih tepat untuk analisis individual** atau satu pasien.
+        """)
+
 else:
     st.info("📂 Silakan upload file CSV terlebih dahulu.")
+
