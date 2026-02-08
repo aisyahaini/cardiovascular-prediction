@@ -5,26 +5,20 @@ import onnxruntime as ort
 import lime.lime_tabular
 import matplotlib.pyplot as plt
 import json
+from collections import defaultdict
 
 # =====================================================
 # HELPER: EXTRACT PROBABILITY FROM ONNX OUTPUT
 # =====================================================
 def extract_proba(outputs):
-    """
-    Convert ONNX outputs to (N, 2) probability matrix
-    Safe for AdaBoost / Tree-based ONNX models
-    """
     proba_raw = outputs[1]
 
-    # Case 1: list of dicts [{0:p0,1:p1}, ...]
     if isinstance(proba_raw[0], dict):
         return np.array([[p[0], p[1]] for p in proba_raw])
 
-    # Case 2: 1D array (only class-1 prob)
     if np.ndim(proba_raw) == 1:
         return np.column_stack([1 - proba_raw, proba_raw])
 
-    # Case 3: already (N,2)
     return np.array(proba_raw)
 
 
@@ -52,7 +46,7 @@ session, FEATURE_NAMES, INPUT_NAME, OUTPUT_NAMES = load_onnx_model()
 # =====================================================
 # STREAMLIT UI
 # =====================================================
-st.title("📂 Prediksi Penyakit Cardiovascular (ONNX + Explainable AI)")
+st.title("📂 Prediksi Penyakit Cardiovascular (ONNX + XAI)")
 
 uploaded_file = st.file_uploader("Upload file CSV", type=["csv"])
 
@@ -93,9 +87,6 @@ if uploaded_file:
     # =====================
     X_raw = df.drop(columns=["num", "id"], errors="ignore")
 
-    # =====================
-    # FEATURE NAME MAPPING
-    # =====================
     shap_to_df_mapping = {
         "num_major_vessels": "ca",
         "chest_pain_type": "cp",
@@ -116,9 +107,6 @@ if uploaded_file:
     df_to_model_mapping = {v: k for k, v in shap_to_df_mapping.items()}
     X_model = X_raw.rename(columns=df_to_model_mapping)
 
-    # =====================
-    # ALIGN FEATURES WITH MODEL
-    # =====================
     for col in FEATURE_NAMES:
         if col not in X_model.columns:
             X_model[col] = 0
@@ -131,7 +119,7 @@ if uploaded_file:
     )
 
     # =====================
-    # PREDICTION (ONNX - FIXED)
+    # PREDICTION
     # =====================
     outputs = session.run(
         OUTPUT_NAMES,
@@ -140,10 +128,9 @@ if uploaded_file:
 
     preds = outputs[0]
     proba_matrix = extract_proba(outputs)
-    probs = proba_matrix[:, 1]
 
     df["prediction"] = preds
-    df["probability"] = probs
+    df["probability"] = proba_matrix[:, 1]
 
     st.subheader("📌 Hasil Prediksi")
     st.dataframe(df.head())
@@ -151,20 +138,19 @@ if uploaded_file:
     # =====================
     # INTERPRETATION
     # =====================
-    st.subheader("📝 Interpretasi Hasil Prediksi")
+    st.subheader("📝 Interpretasi")
 
     total = len(df)
     total_cvd = int(df["prediction"].sum())
 
     st.markdown(f"""
-    Dari **{total} data pasien** yang dianalisis:
-
-    - **{total_cvd} pasien** diprediksi **mengalami CVD**
-    - **{total - total_cvd} pasien** diprediksi **tidak mengalami CVD**
+    - Total pasien: **{total}**
+    - Prediksi CVD: **{total_cvd}**
+    - Tidak CVD: **{total - total_cvd}**
     """)
 
     # =====================================================
-    # LIME LOCAL EXPLANATION (ONNX SAFE)
+    # LIME EXPLANATION
     # =====================================================
     st.subheader("🧩 LIME – Local Explanation")
 
@@ -186,10 +172,58 @@ if uploaded_file:
 
     exp = lime_explainer.explain_instance(
         X_model.iloc[idx].values,
-        onnx_predict_proba
+        onnx_predict_proba,
+        num_features=len(FEATURE_NAMES)
     )
 
     st.components.v1.html(exp.as_html(), height=650, scrolling=True)
+
+    # =====================================================
+    # SHAP-LIKE GLOBAL EXPLANATION (NO SHAP LIB)
+    # =====================================================
+    st.subheader("📊 Global Feature Importance (SHAP-like)")
+
+    sample_size = min(50, len(X_model))
+    sampled_idx = np.random.choice(len(X_model), sample_size, replace=False)
+
+    feature_importance = defaultdict(list)
+
+    for i in sampled_idx:
+        explanation = lime_explainer.explain_instance(
+            X_model.iloc[i].values,
+            onnx_predict_proba,
+            num_features=len(FEATURE_NAMES)
+        )
+
+        for feature, weight in explanation.as_list():
+            fname = feature.split(" ")[0]
+            feature_importance[fname].append(abs(weight))
+
+    shap_like_importance = {
+        f: np.mean(w) for f, w in feature_importance.items()
+    }
+
+    shap_df = (
+        pd.DataFrame({
+            "Feature": shap_like_importance.keys(),
+            "Importance": shap_like_importance.values()
+        })
+        .sort_values(by="Importance", ascending=False)
+    )
+
+    # =====================
+    # PLOT
+    # =====================
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.barh(
+        shap_df["Feature"],
+        shap_df["Importance"]
+    )
+    ax.set_xlabel("Mean |Contribution|")
+    ax.set_title("Global Feature Importance (SHAP-like)")
+    ax.invert_yaxis()
+
+    st.pyplot(fig)
 
 else:
     st.info("📂 Silakan upload file CSV terlebih dahulu.")
