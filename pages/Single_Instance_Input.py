@@ -28,6 +28,25 @@ def load_model():
 session, FEATURE_NAMES, INPUT_NAME, OUTPUT_NAMES = load_model()
 
 # =====================================================
+# DEFAULT VALUES (AMAN & REALISTIS)
+# =====================================================
+DEFAULT_VALUES = {
+    "age": 55,
+    "sex": 1,
+    "cp": 0,
+    "trestbps": 130,
+    "chol": 240,
+    "fbs": 0,
+    "restecg": 1,
+    "thalach": 150,
+    "exang": 0,
+    "oldpeak": 1.0,
+    "slope": 1,
+    "ca": 0,
+    "thal": 2
+}
+
+# =====================================================
 # SAFE PROBABILITY EXTRACTOR
 # =====================================================
 def predict_proba(x):
@@ -38,6 +57,7 @@ def predict_proba(x):
 
     proba_raw = outputs[1]
 
+    # sklearn → ONNX (list of dict)
     if isinstance(proba_raw, list) and isinstance(proba_raw[0], dict):
         return np.array([p[1] for p in proba_raw])
 
@@ -57,10 +77,15 @@ st.title("🫀 CVD Prediction – Single Instance XAI")
 st.subheader("🧾 Input Data Pasien")
 
 input_data = {}
+
 for feat in FEATURE_NAMES:
+    default_val = DEFAULT_VALUES.get(feat, 0.0)
+
     input_data[feat] = st.number_input(
-        feat,
-        value=0.0
+        label=feat,
+        value=float(default_val),
+        step=1.0 if float(default_val).is_integer() else 0.1,
+        format="%.2f"
     )
 
 x_input = np.array([[input_data[f] for f in FEATURE_NAMES]])
@@ -98,7 +123,7 @@ lime_df = (
     .sort_values("LIME_Local", ascending=False)
 )
 
-st.dataframe(lime_df)
+st.dataframe(lime_df, use_container_width=True)
 
 fig1, ax1 = plt.subplots(figsize=(8, 6))
 ax1.barh(lime_df["Feature"], lime_df["LIME_Local"])
@@ -134,7 +159,7 @@ shap_df = (
     .sort_values("SHAP_Global", ascending=False)
 )
 
-st.dataframe(shap_df)
+st.dataframe(shap_df, use_container_width=True)
 
 fig2, ax2 = plt.subplots(figsize=(8, 6))
 ax2.barh(shap_df["Feature"], shap_df["SHAP_Global"])
@@ -159,4 +184,4 @@ c1, c2 = st.columns(2)
 c1.metric("Spearman ρ", f"{rho:.3f}")
 c2.metric("Kendall τ", f"{tau:.3f}")
 
-st.dataframe(comp.sort_values("SHAP_Rank"))
+st.dataframe(comp.sort_values("SHAP_Rank"), use_container_width=True)
