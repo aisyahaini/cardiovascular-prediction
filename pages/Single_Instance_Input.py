@@ -232,12 +232,13 @@ if submit:
 
     st.markdown("""
     - **LIME lebih unggul untuk analisis individual**, karena menjelaskan keputusan model
-      secara spesifik pada satu pasien.
+      secara spesifik pada instance tertentu.
     - **SHAP tetap memiliki keunggulan**, terutama untuk analisis global karena konsisten
       secara teoritis dan stabil terhadap seluruh dataset.
     - Oleh karena itu, pada **single input**, LIME menjadi metode utama,
       sementara SHAP berfungsi sebagai pendukung interpretasi global model.
     """)
+
 
 
 
