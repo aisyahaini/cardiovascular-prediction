@@ -7,9 +7,9 @@ import pandas as pd
 st.set_page_config(page_title="CVD Prediction (ONNX)", layout="wide")
 
 # =========================
-# RAW FEATURES (UI)
+# RAW FEATURES (ORDERED)
 # =========================
-RAW_FEATURES = [
+FEATURES = [
     "age", "sex", "chest_pain_type", "resting_blood_pressure",
     "cholesterol", "fasting_blood_sugar", "Restecg",
     "max_heart_rate_achieved", "exercise_induced_angina",
@@ -39,36 +39,29 @@ def load_model():
 session, INPUT_NAME, MODEL_DIM = load_model()
 
 # =========================
-# SAFE OUTPUT PARSER (FIXED)
+# ULTRA SAFE OUTPUT PARSER
 # =========================
 def parse_output(outputs):
     """
-    Robust ONNX output parser
-    Supports:
-    - label only
-    - label + prob
-    - prob as scalar / 1D / 2D
+    Guaranteed-safe ONNX output parser
     """
-    label = int(outputs[0].ravel()[0])
+    # Label (always first output)
+    label = int(np.asarray(outputs[0]).ravel()[0])
+
     prob = None
 
+    # Probability (if exists)
     if len(outputs) > 1:
         raw = outputs[1]
 
         if isinstance(raw, dict):
-            prob = float(raw.get(1, list(raw.values())[-1]))
+            prob = float(list(raw.values())[-1])
 
         else:
             raw = np.asarray(raw)
 
-            if raw.ndim == 2:
-                prob = float(raw[0, -1])
-
-            elif raw.ndim == 1:
-                prob = float(raw[0])
-
-            elif raw.ndim == 0:
-                prob = float(raw)
+            if raw.size > 0:
+                prob = float(raw.ravel()[0])
 
     return label, prob
 
@@ -103,7 +96,7 @@ if submit:
         thalach, exang, oldpeak, slope, ca, thal
     ], dtype=np.float32)
 
-    # Adapt input size to ONNX
+    # Match ONNX input shape
     if MODEL_DIM is None:
         X = raw_input.reshape(1, -1)
     else:
@@ -113,7 +106,11 @@ if submit:
     outputs = session.run(None, {INPUT_NAME: X})
     label, prob = parse_output(outputs)
 
+    # =========================
+    # OUTPUT
+    # =========================
     st.subheader("📊 Prediction Result")
+
     st.success("CVD Detected" if label == 1 else "No CVD Detected")
 
     if prob is not None:
@@ -122,14 +119,14 @@ if submit:
         st.info("Model does not provide probability output")
 
     # =========================
-    # FEATURE IMPACT (FAST & SAFE)
+    # FEATURE IMPACT (FAST)
     # =========================
     if prob is not None:
         st.subheader("📈 Feature Impact (Local Approximation)")
 
         impacts = []
 
-        for i, name in enumerate(RAW_FEATURES):
+        for i, name in enumerate(FEATURES):
             if i >= X.shape[1]:
                 continue
 
@@ -144,8 +141,9 @@ if submit:
                 impacts.append((name, prob - p2))
 
         if impacts:
-            df = pd.DataFrame(impacts, columns=["Feature", "Impact"]) \
-                .sort_values("Impact", ascending=False)
+            df = pd.DataFrame(
+                impacts, columns=["Feature", "Impact"]
+            ).sort_values("Impact", ascending=False)
 
             fig, ax = plt.subplots()
             df.plot.barh(x="Feature", y="Impact", ax=ax, legend=False)
@@ -153,8 +151,8 @@ if submit:
             st.pyplot(fig)
 
     st.markdown("""
-    **Catatan Ilmiah**  
-    Feature Impact dihitung menggunakan pendekatan *local perturbation*  
+    **Catatan Interpretasi**  
+    Feature impact dihitung menggunakan pendekatan *local perturbation*  
     yang secara konseptual setara dengan **LIME-style explanation**,  
-    namun sepenuhnya kompatibel dengan **ONNX Runtime**.
+    dan sepenuhnya kompatibel dengan **ONNX Runtime**.
     """)
