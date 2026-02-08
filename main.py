@@ -9,8 +9,8 @@ st.title("🫀 Sistem Prediksi Penyakit Cardiovascular")
 
 st.markdown("""
 Aplikasi ini menggunakan **AdaBoost Classifier** untuk memprediksi risiko
-penyakit cardiovascular berdasarkan data klinis pasien.
-a
+penyakit Cardiovascular Disease berdasarkan data klinis pasien.
+
 ### 📌 Fitur Aplikasi:
 - Prediksi berbasis **file CSV**
 - Prediksi **input manual**
@@ -19,3 +19,4 @@ a
 
 👉 Silakan pilih menu di sidebar.
 """)
+
