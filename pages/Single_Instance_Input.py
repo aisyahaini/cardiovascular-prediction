@@ -202,10 +202,15 @@ if submit:
     st.pyplot(fig2)
 
 
+    # =====================
+    # KESIMPULAN ILMIAH
+    # =====================
+    st.subheader("📌 Kesimpulan Ilmiah")
+    
     # =====================================================
     # CONSISTENCY ANALYSIS
     # =====================================================
-    st.subheader("📐 Konsistensi SHAP-like vs LIME-like")
+    st.h2("📐 Konsistensi SHAP-like vs LIME-like")
 
     comp = shap_df.merge(lime_df, on="Feature")
     comp["SHAP_Rank"] = comp["SHAP_Global"].rank(ascending=False)
@@ -219,4 +224,18 @@ if submit:
     c2.metric("Kendall τ", f"{tau:.3f}")
 
     st.dataframe(comp.sort_values("SHAP_Rank"))
+
+    # =====================
+    # KESIMPULAN ILMIAH
+    # =====================
+    st.subheader("📌 Kesimpulan Ilmiah")
+
+    st.markdown("""
+    - **LIME lebih unggul untuk analisis individual**, karena menjelaskan keputusan model
+      secara spesifik pada satu pasien.
+    - **SHAP tetap memiliki keunggulan**, terutama untuk analisis global karena konsisten
+      secara teoritis dan stabil terhadap seluruh dataset.
+    - Oleh karena itu, pada **single input**, LIME menjadi metode utama,
+      sementara SHAP berfungsi sebagai pendukung interpretasi global model.
+    """)
 
