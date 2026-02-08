@@ -57,7 +57,7 @@ session, FEATURE_NAMES, INPUT_NAME, OUTPUT_NAMES = load_model()
 # STREAMLIT UI
 # =====================================================
 st.set_page_config(page_title="CVD Prediction + XAI", layout="wide")
-st.title("📂 Cardiovascular Disease Prediction (ONNX + XAI)")
+st.title("📂 Prediksi Penyakit Cardiovascular Berbasis Explainable AI")
 
 uploaded_file = st.file_uploader("Upload file CSV", type=["csv"])
 
@@ -161,7 +161,7 @@ if uploaded_file:
     # =====================================================
     # SHAP-LIKE GLOBAL (FIRST)
     # =====================================================
-    st.subheader("📊 Global Feature Importance (SHAP-like)")
+    st.subheader("📊 SHAP – Global Feature Importance")
 
     feature_importance = defaultdict(list)
 
@@ -252,7 +252,7 @@ if uploaded_file:
     # =====================================================
     # SHAP vs LIME COMPARISON
     # =====================================================
-    st.subheader("📐 SHAP-like vs LIME Consistency")
+    st.subheader("📐 SHAP vs LIME Consistency")
 
     comparison_df = shap_df.merge(
         lime_local_df,
@@ -299,5 +299,6 @@ if uploaded_file:
 
 else:
     st.info("📂 Silakan upload file CSV terlebih dahulu.")
+
 
 
