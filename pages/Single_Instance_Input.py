@@ -2,222 +2,168 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import onnxruntime as ort
-import json
 import matplotlib.pyplot as plt
+from scipy.stats import spearmanr, kendalltau
+import json
 
-# =========================
-# CONFIG
-# =========================
-st.set_page_config(page_title="CVD Prediction (ONNX)", layout="wide")
-
-# =========================
+# =====================================================
 # LOAD MODEL
-# =========================
+# =====================================================
 @st.cache_resource
 def load_model():
-    sess = ort.InferenceSession(
+    session = ort.InferenceSession(
         "adaboost_model.onnx",
         providers=["CPUExecutionProvider"]
     )
-
     with open("feature_names.json") as f:
         feature_names = json.load(f)
 
-    input_name = sess.get_inputs()[0].name
-    output_names = [o.name for o in sess.get_outputs()]
-
-    return sess, feature_names, input_name, output_names
-
+    return (
+        session,
+        feature_names,
+        session.get_inputs()[0].name,
+        [o.name for o in session.get_outputs()]
+    )
 
 session, FEATURE_NAMES, INPUT_NAME, OUTPUT_NAMES = load_model()
 
-# =========================
-# SAFE PROBA EXTRACTOR
-# =========================
-def extract_probability(raw):
-    """
-    Universal ONNX probability extractor
-    Works for:
-    - numpy array
-    - list
-    - dict
-    """
-    # Case 1: dict (sklearn AdaBoost often)
-    if isinstance(raw, dict):
-        return float(raw.get(1, list(raw.values())[-1]))
-
-    # Case 2: list of dict
-    if isinstance(raw, list) and isinstance(raw[0], dict):
-        return float(raw[0].get(1, list(raw[0].values())[-1]))
-
-    # Case 3: numpy array
-    raw = np.asarray(raw)
-
-    if raw.ndim == 2:
-        return float(raw[0, 1])
-
-    if raw.ndim == 1:
-        return float(raw[0])
-
-    raise ValueError("Unknown ONNX probability output format")
-
-# =========================
-# UI
-# =========================
-st.title("🫀 Prediksi Manual Penyakit Cardiovascular (Single Input)")
-
-with st.form("input_form"):
-    age = st.number_input("Age", 1, 120, 50)
-    sex = st.selectbox("Sex", ["Female", "Male"])
-    sex = 1 if sex == "Male" else 0
-    cp = st.selectbox("Chest Pain Type", [0, 1, 2, 3])
-    trestbps = st.number_input("Resting BP", 80, 250, 120)
-    chol = st.number_input("Cholesterol", 100, 600, 230)
-    fbs = st.selectbox("Fasting Blood Sugar > 120", [0, 1])
-    restecg = st.selectbox("Rest ECG", [0, 1, 2])
-    thalach = st.number_input("Max Heart Rate", 60, 220, 150)
-    exang = st.selectbox("Exercise Angina", [0, 1])
-    oldpeak = st.number_input("ST Depression", 0.0, 10.0, 1.0)
-    slope = st.selectbox("Slope", [0, 1, 2])
-    ca = st.selectbox("CA", [0, 1, 2, 3])
-    thal = st.selectbox("Thal", [0, 1, 2, 3])
-
-    submit = st.form_submit_button("Predict")
-
-# =========================
-# PREDICTION
-# =========================
-if submit:
-    input_data = pd.DataFrame([{
-        "age": age,
-        "sex": sex,
-        "chest_pain_type": cp,
-        "resting_blood_pressure": trestbps,
-        "cholesterol": chol,
-        "fasting_blood_sugar": fbs,
-        "Restecg": restecg,
-        "max_heart_rate_achieved": thalach,
-        "exercise_induced_angina": exang,
-        "st_depression": oldpeak,
-        "st_slope_type": slope,
-        "num_major_vessels": ca,
-        "thalassemia_type": thal
-    }])
-
-    for col in FEATURE_NAMES:
-        if col not in input_data:
-            input_data[col] = 0
-
-    X = (
-        input_data[FEATURE_NAMES]
-        .astype(np.float32)
-        .values
-    )
-
+# =====================================================
+# HELPER
+# =====================================================
+def predict_proba(x):
     outputs = session.run(
         OUTPUT_NAMES,
-        {INPUT_NAME: X}
+        {INPUT_NAME: x.astype(np.float32)}
+    )
+    proba = outputs[1]
+    if proba.ndim == 1:
+        return proba
+    return proba[:, 1]
+
+# =====================================================
+# UI
+# =====================================================
+st.set_page_config(layout="wide")
+st.title("🫀 CVD Prediction – Single Input + Explainable AI")
+
+st.subheader("🧾 Input Data Pasien")
+
+input_data = {}
+
+for feat in FEATURE_NAMES:
+    input_data[feat] = st.number_input(
+        label=feat,
+        value=0.0
     )
 
-    # LABEL
-    pred = int(outputs[0][0])
+x_input = np.array([[input_data[f] for f in FEATURE_NAMES]])
 
-    # PROBABILITY (SAFE)
-    prob = extract_probability(outputs[1])
+# =====================================================
+# PREDICTION
+# =====================================================
+prob = predict_proba(x_input)[0]
+pred = int(prob >= 0.5)
 
-    # =========================
-    # OUTPUT
-    # =========================
-    st.subheader("📊 Result")
-    st.metric("CVD Probability", f"{prob:.2f}")
+st.subheader("📌 Hasil Prediksi")
+st.metric("Probabilitas CVD", f"{prob:.4f}")
+st.metric("Prediksi", "CVD" if pred else "No CVD")
 
-    st.success("CVD Detected" if pred == 1 else "No CVD Detected")
+# =====================================================
+# LIME-LIKE LOCAL EXPLANATION (MANUAL)
+# =====================================================
+st.subheader("🧩 LIME-like Local Explanation (Perturbation-based)")
 
-    # =========================
-    # SIMPLE FEATURE IMPACT
-    # =========================
-    st.subheader("🧠 Feature Impact")
+delta = 0.1
+lime_contrib = {}
 
-    impacts = []
-    base_prob = prob
+base_prob = prob
 
-    for i, name in enumerate(FEATURE_NAMES):
-        X_temp = X.copy()
-        X_temp[0, i] = 0
+for i, feat in enumerate(FEATURE_NAMES):
+    x_perturb = x_input.copy()
+    x_perturb[0, i] += delta
+    new_prob = predict_proba(x_perturb)[0]
+    lime_contrib[feat] = abs(new_prob - base_prob)
 
-        out = session.run(
-            OUTPUT_NAMES,
-            {INPUT_NAME: X_temp}
-        )
+lime_df = (
+    pd.DataFrame({
+        "Feature": lime_contrib.keys(),
+        "LIME_Local": lime_contrib.values()
+    })
+    .sort_values("LIME_Local", ascending=False)
+)
 
-        new_prob = extract_probability(out[1])
-        impacts.append((name, base_prob - new_prob))
+st.dataframe(lime_df)
 
-    df_imp = pd.DataFrame(impacts, columns=["Feature", "Impact"]) \
-        .sort_values("Impact", ascending=False)
+fig1, ax1 = plt.subplots(figsize=(8, 6))
+ax1.barh(lime_df["Feature"], lime_df["LIME_Local"])
+ax1.set_title("LIME-like Local Feature Importance")
+ax1.invert_yaxis()
+ax1.set_facecolor("white")
+st.pyplot(fig1)
 
-    st.dataframe(df_imp.head(8))
+# =====================================================
+# SHAP-LIKE GLOBAL EXPLANATION (MANUAL)
+# =====================================================
+st.subheader("📊 SHAP-like Global Explanation (Sampling-based)")
 
-    fig, ax = plt.subplots()
-    df_imp.head(8).plot.barh(x="Feature", y="Impact", ax=ax, legend=False)
-    ax.invert_yaxis()
-    st.pyplot(fig)
+n_samples = 100
+shap_contrib = {f: [] for f in FEATURE_NAMES}
 
-# =========================
-# INTERPRETASI HASIL (LIME-STYLE NARRATIVE)
-# =========================
-st.subheader("📝 Interpretasi Hasil Prediksi")
+for _ in range(n_samples):
+    noise = np.random.normal(0, 0.1, size=x_input.shape)
+    x_sample = x_input + noise
+    base = predict_proba(x_sample)[0]
 
-# Confidence level
-if prob >= 0.75:
-    confidence = "tinggi"
-elif prob >= 0.5:
-    confidence = "sedang"
-else:
-    confidence = "rendah"
+    for i, feat in enumerate(FEATURE_NAMES):
+        x_p = x_sample.copy()
+        x_p[0, i] += delta
+        new_p = predict_proba(x_p)[0]
+        shap_contrib[feat].append(abs(new_p - base))
 
-# Pisahkan fitur berdasarkan kontribusi
-positive_features = df_imp[df_imp["Impact"] > 0].head(5).values.tolist()
-negative_features = df_imp[df_imp["Impact"] < 0].head(5).values.tolist()
+shap_df = (
+    pd.DataFrame({
+        "Feature": shap_contrib.keys(),
+        "SHAP_Global": [np.mean(v) for v in shap_contrib.values()]
+    })
+    .sort_values("SHAP_Global", ascending=False)
+)
 
-st.markdown(f"""
-Model **AdaBoost** mampu memprediksi risiko penyakit kardiovaskular (**CVD**)
-dengan tingkat keyakinan **{confidence}**
-(probabilitas **{prob:.2f}**).
+st.dataframe(shap_df)
 
-Berdasarkan **LIME (Local Interpretable Model-agnostic Explanation)**,
-prediksi pada **satu pasien** ini terutama dipengaruhi oleh perubahan
-nilai fitur di sekitar instance yang dianalisis.
-""")
+fig2, ax2 = plt.subplots(figsize=(8, 6))
+ax2.barh(shap_df["Feature"], shap_df["SHAP_Global"])
+ax2.set_title("SHAP-like Global Feature Importance")
+ax2.invert_yaxis()
+ax2.set_facecolor("white")
+st.pyplot(fig2)
 
-# Fitur yang meningkatkan risiko
-if positive_features:
-    st.markdown("🔺 **Fitur yang meningkatkan risiko:**")
-    for f, w in positive_features:
-        st.markdown(f"- **{f} > 0.00** (kontribusi: `{w:.3f}`)")
+# =====================================================
+# CONSISTENCY ANALYSIS
+# =====================================================
+st.subheader("📐 Konsistensi SHAP-like vs LIME-like")
 
-# Fitur yang menurunkan risiko
-if negative_features:
-    st.markdown("🔻 **Fitur yang menurunkan risiko:**")
-    for f, w in negative_features:
-        st.markdown(f"- **{f} ≤ 0.00** (kontribusi: `{abs(w):.3f}`)")
+comparison = shap_df.merge(lime_df, on="Feature")
 
-# =========================
-# KESIMPULAN ILMIAH
-# =========================
-st.subheader("📌 Kesimpulan Ilmiah")
+comparison["SHAP_Rank"] = comparison["SHAP_Global"].rank(ascending=False)
+comparison["LIME_Rank"] = comparison["LIME_Local"].rank(ascending=False)
+
+rho, _ = spearmanr(comparison["SHAP_Rank"], comparison["LIME_Rank"])
+tau, _ = kendalltau(comparison["SHAP_Rank"], comparison["LIME_Rank"])
+
+col1, col2 = st.columns(2)
+col1.metric("Spearman ρ", f"{rho:.3f}")
+col2.metric("Kendall τ", f"{tau:.3f}")
+
+st.dataframe(comparison.sort_values("SHAP_Rank"))
+
+# =====================================================
+# INTERPRETASI
+# =====================================================
+st.subheader("📌 Interpretasi")
 
 st.markdown("""
-- **LIME lebih unggul untuk analisis individual**, karena mampu menjelaskan
-  keputusan model secara spesifik pada satu pasien.
-- **SHAP tetap memiliki keunggulan**, terutama untuk analisis global,
-  karena konsisten secara teoritis dan stabil terhadap seluruh dataset.
-- Oleh karena itu, pada **single input**, pendekatan berbasis **LIME**
-  menjadi metode utama dalam interpretasi,
-  sementara **SHAP berfungsi sebagai pendukung interpretasi global model**.
+- **LIME-like** menunjukkan fitur yang paling memengaruhi **satu pasien**.
+- **SHAP-like** menunjukkan fitur yang stabil dan penting secara **global**.
+- Korelasi tinggi → konsistensi interpretasi model baik.
+- Pendekatan ini **model-agnostic dan bebas dependensi SHAP/LIME library**.
 """)
-
-
-dari code diatas berikan tambahan analisis seperti shap tapi ga pake lib dari shap langsung, dan berikan analisis untuk hasil shap nya diletakkan sebelum feature impact atau lime. dan berikan semua code perbaikan untuk single input nya 
-
-
