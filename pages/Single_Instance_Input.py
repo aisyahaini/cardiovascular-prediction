@@ -7,7 +7,7 @@ import pandas as pd
 st.set_page_config(page_title="CVD Prediction (ONNX)", layout="wide")
 
 # =========================
-# RAW FEATURES (ORDERED)
+# FEATURE ORDER (MANUAL & FIX)
 # =========================
 FEATURES = [
     "age", "sex", "chest_pain_type", "resting_blood_pressure",
@@ -31,37 +31,48 @@ def load_model():
     input_name = input_meta.name
     input_dim = input_meta.shape[1]
 
+    # Dynamic shape safety
     if isinstance(input_dim, str) or input_dim is None:
-        input_dim = None
+        input_dim = len(FEATURES)
 
     return sess, input_name, input_dim
 
 session, INPUT_NAME, MODEL_DIM = load_model()
 
 # =========================
-# ULTRA SAFE OUTPUT PARSER
+# SUPER SAFE OUTPUT PARSER
 # =========================
 def parse_output(outputs):
     """
-    Guaranteed-safe ONNX output parser
+    Parse ONNX outputs safely.
+    Works even if model outputs ONLY label.
     """
-    # Label (always first output)
-    label = int(np.asarray(outputs[0]).ravel()[0])
+    # ---------- LABEL ----------
+    label_raw = outputs[0]
+    label = int(np.asarray(label_raw).ravel()[0])
 
+    # ---------- PROBABILITY ----------
     prob = None
 
-    # Probability (if exists)
     if len(outputs) > 1:
         raw = outputs[1]
 
-        if isinstance(raw, dict):
-            prob = float(list(raw.values())[-1])
+        try:
+            # dict output (rare but possible)
+            if isinstance(raw, dict):
+                vals = list(raw.values())
+                if len(vals) > 0 and isinstance(vals[-1], (float, int)):
+                    prob = float(vals[-1])
 
-        else:
-            raw = np.asarray(raw)
+            # numpy / list
+            elif raw is not None:
+                arr = np.asarray(raw).astype(np.float32)
 
-            if raw.size > 0:
-                prob = float(raw.ravel()[0])
+                if arr.size > 0 and np.isfinite(arr.ravel()[0]):
+                    prob = float(arr.ravel()[0])
+
+        except Exception:
+            prob = None
 
     return label, prob
 
@@ -96,38 +107,35 @@ if submit:
         thalach, exang, oldpeak, slope, ca, thal
     ], dtype=np.float32)
 
-    # Match ONNX input shape
-    if MODEL_DIM is None:
-        X = raw_input.reshape(1, -1)
-    else:
-        X = np.zeros((1, MODEL_DIM), dtype=np.float32)
-        X[0, :min(len(raw_input), MODEL_DIM)] = raw_input[:MODEL_DIM]
+    # Match ONNX input dimension
+    X = np.zeros((1, MODEL_DIM), dtype=np.float32)
+    X[0, :min(len(raw_input), MODEL_DIM)] = raw_input[:MODEL_DIM]
 
     outputs = session.run(None, {INPUT_NAME: X})
     label, prob = parse_output(outputs)
 
     # =========================
-    # OUTPUT
+    # RESULT
     # =========================
     st.subheader("📊 Prediction Result")
 
     st.success("CVD Detected" if label == 1 else "No CVD Detected")
 
     if prob is not None:
-        st.metric("CVD Probability", f"{prob:.2f}")
+        st.metric("Estimated Risk Score", f"{prob:.2f}")
     else:
-        st.info("Model does not provide probability output")
+        st.info("Model does not provide probability output (label-only ONNX model)")
 
     # =========================
-    # FEATURE IMPACT (FAST)
+    # FEATURE IMPACT (FAST & SAFE)
     # =========================
     if prob is not None:
-        st.subheader("📈 Feature Impact (Local Approximation)")
+        st.subheader("📈 Local Feature Impact (LIME-style Approximation)")
 
         impacts = []
 
         for i, name in enumerate(FEATURES):
-            if i >= X.shape[1]:
+            if i >= MODEL_DIM:
                 continue
 
             X_tmp = X.copy()
@@ -151,8 +159,8 @@ if submit:
             st.pyplot(fig)
 
     st.markdown("""
-    **Catatan Interpretasi**  
-    Feature impact dihitung menggunakan pendekatan *local perturbation*  
-    yang secara konseptual setara dengan **LIME-style explanation**,  
-    dan sepenuhnya kompatibel dengan **ONNX Runtime**.
+    **Catatan Ilmiah**  
+    Interpretasi dilakukan menggunakan *local perturbation analysis*  
+    yang secara konseptual setara dengan **LIME** dan kompatibel penuh  
+    dengan model **ONNX tanpa SHAP/LIME library**.
     """)
