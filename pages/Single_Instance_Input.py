@@ -210,7 +210,7 @@ if submit:
     # =====================================================
     # CONSISTENCY ANALYSIS
     # =====================================================
-    st.h2("📐 Konsistensi SHAP-like vs LIME-like")
+    st.markdown("📐 Konsistensi SHAP-like vs LIME-like")
 
     comp = shap_df.merge(lime_df, on="Feature")
     comp["SHAP_Rank"] = comp["SHAP_Global"].rank(ascending=False)
@@ -238,4 +238,5 @@ if submit:
     - Oleh karena itu, pada **single input**, LIME menjadi metode utama,
       sementara SHAP berfungsi sebagai pendukung interpretasi global model.
     """)
+
 
