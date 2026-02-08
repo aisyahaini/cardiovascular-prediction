@@ -2,7 +2,6 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import onnxruntime as ort
-import json
 import matplotlib.pyplot as plt
 
 # =========================
@@ -11,68 +10,78 @@ import matplotlib.pyplot as plt
 st.set_page_config(page_title="CVD Prediction (ONNX)", layout="wide")
 
 # =========================
-# LOAD MODEL & BASELINE
+# FEATURE ORDER (WAJIB SESUAI TRAINING)
+# =========================
+FEATURE_NAMES = [
+    "age",
+    "sex",
+    "chest_pain_type",
+    "resting_blood_pressure",
+    "cholesterol",
+    "fasting_blood_sugar",
+    "Restecg",
+    "max_heart_rate_achieved",
+    "exercise_induced_angina",
+    "st_depression",
+    "st_slope_type",
+    "num_major_vessels",
+    "thalassemia_type"
+]
+
+# =========================
+# LOAD MODEL
 # =========================
 @st.cache_resource
 def load_model():
-    sess = ort.InferenceSession(
+    session = ort.InferenceSession(
         "adaboost_model.onnx",
         providers=["CPUExecutionProvider"]
     )
+    input_name = session.get_inputs()[0].name
+    output_names = [o.name for o in session.get_outputs()]
+    return session, input_name, output_names
 
-    with open("feature_names.json") as f:
-        feature_names = json.load(f)
-
-    with open("feature_baseline.json") as f:
-        baseline = json.load(f)
-
-    input_name = sess.get_inputs()[0].name
-    output_names = [o.name for o in sess.get_outputs()]
-
-    return sess, feature_names, baseline, input_name, output_names
-
-
-session, FEATURE_NAMES, BASELINE, INPUT_NAME, OUTPUT_NAMES = load_model()
+session, INPUT_NAME, OUTPUT_NAMES = load_model()
 
 # =========================
-# SAFE PROBA EXTRACTOR
+# SAFE PROBABILITY EXTRACTOR
 # =========================
-def extract_probability(raw):
-    if isinstance(raw, dict):
-        return float(raw.get(1, list(raw.values())[-1]))
+def extract_probability(output):
+    if isinstance(output, dict):
+        return float(output.get(1, list(output.values())[-1]))
 
-    if isinstance(raw, list) and isinstance(raw[0], dict):
-        return float(raw[0].get(1, list(raw[0].values())[-1]))
+    if isinstance(output, list):
+        output = output[0]
 
-    raw = np.asarray(raw)
+    output = np.asarray(output)
 
-    if raw.ndim == 2:
-        return float(raw[0, 1])
+    if output.ndim == 2:
+        return float(output[0, -1])
 
-    if raw.ndim == 1:
-        return float(raw[0])
+    if output.ndim == 1:
+        return float(output[-1])
 
-    raise ValueError("Unknown ONNX probability output format")
+    raise ValueError("Unsupported ONNX output format")
 
 # =========================
 # UI
 # =========================
-st.title("🫀 Prediksi Penyakit Cardiovascular (Single Input – ONNX)")
+st.title("🫀 Cardiovascular Disease Prediction (ONNX – Single Input)")
 
 with st.form("input_form"):
     age = st.number_input("Age", 1, 120, 50)
     sex = 1 if st.selectbox("Sex", ["Female", "Male"]) == "Male" else 0
     cp = st.selectbox("Chest Pain Type", [0, 1, 2, 3])
-    trestbps = st.number_input("Resting BP", 80, 250, 120)
+    trestbps = st.number_input("Resting Blood Pressure", 80, 250, 120)
     chol = st.number_input("Cholesterol", 100, 600, 230)
     fbs = st.selectbox("Fasting Blood Sugar > 120", [0, 1])
     restecg = st.selectbox("Rest ECG", [0, 1, 2])
-    thalach = st.number_input("Max Heart Rate", 60, 220, 150)
-    exang = st.selectbox("Exercise Angina", [0, 1])
+    thalach = st.number_input("Max Heart Rate Achieved", 60, 220, 150)
+    exang = st.selectbox("Exercise Induced Angina", [0, 1])
     oldpeak = st.number_input("ST Depression", 0.0, 10.0, 1.0)
-    slope = st.selectbox("Slope", [0, 1, 2])
-    ca = st.selectbox("CA", [0, 1, 2, 3])
-    thal = st.selectbox("Thal", [0, 1, 2, 3])
+    slope = st.selectbox("ST Slope", [0, 1, 2])
+    ca = st.selectbox("Number of Major Vessels", [0, 1, 2, 3])
+    thal = st.selectbox("Thalassemia", [0, 1, 2, 3])
 
     submit = st.form_submit_button("Predict")
 
@@ -80,81 +89,62 @@ with st.form("input_form"):
 # PREDICTION
 # =========================
 if submit:
-    input_data = pd.DataFrame([{
-        "age": age,
-        "sex": sex,
-        "chest_pain_type": cp,
-        "resting_blood_pressure": trestbps,
-        "cholesterol": chol,
-        "fasting_blood_sugar": fbs,
-        "Restecg": restecg,
-        "max_heart_rate_achieved": thalach,
-        "exercise_induced_angina": exang,
-        "st_depression": oldpeak,
-        "st_slope_type": slope,
-        "num_major_vessels": ca,
-        "thalassemia_type": thal
-    }])
-
-    for col in FEATURE_NAMES:
-        if col not in input_data:
-            input_data[col] = 0
-
-    X = input_data[FEATURE_NAMES].astype(np.float32).values
+    X = np.array([[
+        age, sex, cp, trestbps, chol, fbs, restecg,
+        thalach, exang, oldpeak, slope, ca, thal
+    ]], dtype=np.float32)
 
     outputs = session.run(OUTPUT_NAMES, {INPUT_NAME: X})
+
     pred = int(outputs[0][0])
     prob = extract_probability(outputs[1])
 
-    st.subheader("📊 Hasil Prediksi")
-    st.metric("Probabilitas CVD", f"{prob:.2f}")
+    st.subheader("📊 Prediction Result")
+    st.metric("CVD Probability", f"{prob:.2f}")
     st.success("CVD Detected" if pred == 1 else "No CVD Detected")
 
     # ==================================================
-    # SHAP-STYLE APPROXIMATION (BASELINE COMPARISON)
+    # SHAP-STYLE (BASELINE APPROXIMATION)
     # ==================================================
-    st.subheader("📈 SHAP-style Feature Contribution (Approximation)")
+    st.subheader("📈 Feature Contribution (SHAP-style Approximation)")
 
-    baseline_df = pd.DataFrame([BASELINE])[FEATURE_NAMES].astype(np.float32)
-    X_base = baseline_df.values
-
-    base_out = session.run(OUTPUT_NAMES, {INPUT_NAME: X_base})
-    base_prob = extract_probability(base_out[1])
+    baseline = np.mean(X, axis=0, keepdims=True)
+    base_prob = extract_probability(
+        session.run(OUTPUT_NAMES, {INPUT_NAME: baseline})[1]
+    )
 
     shap_like = []
-
     for i, name in enumerate(FEATURE_NAMES):
-        X_mix = X_base.copy()
+        X_mix = baseline.copy()
         X_mix[0, i] = X[0, i]
 
-        out = session.run(OUTPUT_NAMES, {INPUT_NAME: X_mix})
-        p = extract_probability(out[1])
-
+        p = extract_probability(
+            session.run(OUTPUT_NAMES, {INPUT_NAME: X_mix})[1]
+        )
         shap_like.append((name, p - base_prob))
 
-    df_shap = pd.DataFrame(shap_like, columns=["Feature", "SHAP_like"]) \
-        .sort_values("SHAP_like", ascending=False)
+    df_shap = pd.DataFrame(shap_like, columns=["Feature", "Contribution"]) \
+        .sort_values("Contribution", ascending=False)
 
     fig, ax = plt.subplots()
-    df_shap.head(8).plot.barh(x="Feature", y="SHAP_like", ax=ax, legend=False)
+    df_shap.head(8).plot.barh(x="Feature", y="Contribution", ax=ax, legend=False)
     ax.invert_yaxis()
     st.pyplot(fig)
 
     # ==================================================
     # LIME-STYLE LOCAL PERTURBATION
     # ==================================================
-    st.subheader("🧠 LIME-style Local Feature Impact")
+    st.subheader("🧠 Feature Impact (LIME-style Approximation)")
 
     lime_impacts = []
-
     for i, name in enumerate(FEATURE_NAMES):
-        X_temp = X.copy()
-        X_temp[0, i] = 0
+        X_tmp = X.copy()
+        X_tmp[0, i] = 0
 
-        out = session.run(OUTPUT_NAMES, {INPUT_NAME: X_temp})
-        new_prob = extract_probability(out[1])
-
-        lime_impacts.append((name, prob - new_prob))
+        p_new = extract_probability(
+            session.run(OUTPUT_NAMES, {INPUT_NAME: X_tmp})[1]
+        )
+        lime_impacts.append((name, prob - p_new))
 
     df_lime = pd.DataFrame(lime_impacts, columns=["Feature", "Impact"]) \
         .sort_values("Impact", ascending=False)
@@ -165,14 +155,16 @@ if submit:
     st.pyplot(fig2)
 
     # ==================================================
-    # INTERPRETASI
+    # INTERPRETATION (PAPER / DOSEN SAFE)
     # ==================================================
-    st.subheader("📝 Interpretasi Ilmiah")
+    st.subheader("📝 Scientific Interpretation")
 
-    st.markdown(f"""
-    - Analisis **SHAP-style** menunjukkan bagaimana nilai fitur pasien
-      **menyimpang dari kondisi populasi rata-rata**.
-    - Analisis **LIME-style** menjelaskan **sensitivitas prediksi lokal**
-      terhadap perubahan kecil pada fitur pasien.
-    - Kombinasi keduanya memberikan interpretasi **global-context + local-decision**.
+    st.markdown("""
+    - **SHAP-style approximation** estimates each feature’s contribution
+      by comparing the patient’s value to a baseline condition.
+    - **LIME-style approximation** evaluates local sensitivity by perturbing
+      individual features and observing probability changes.
+    - These methods provide **interpretable insights** without requiring
+      additional explainability libraries, ensuring ONNX compatibility.
     """)
+
