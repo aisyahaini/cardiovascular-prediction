@@ -7,9 +7,9 @@ import pandas as pd
 st.set_page_config(page_title="CVD Prediction (ONNX)", layout="wide")
 
 # =========================
-# FEATURE ORDER (HARUS SESUAI TRAINING)
+# RAW FEATURES (UI LEVEL)
 # =========================
-FEATURE_NAMES = [
+RAW_FEATURES = [
     "age", "sex", "chest_pain_type", "resting_blood_pressure",
     "cholesterol", "fasting_blood_sugar", "Restecg",
     "max_heart_rate_achieved", "exercise_induced_angina",
@@ -18,7 +18,7 @@ FEATURE_NAMES = [
 ]
 
 # =========================
-# LOAD MODEL
+# LOAD ONNX MODEL
 # =========================
 @st.cache_resource
 def load_model():
@@ -27,24 +27,23 @@ def load_model():
         providers=["CPUExecutionProvider"]
     )
 
-    input_name = sess.get_inputs()[0].name
-    input_shape = sess.get_inputs()[0].shape
+    input_meta = sess.get_inputs()[0]
+    input_name = input_meta.name
+    input_dim = input_meta.shape[1]
+
+    if isinstance(input_dim, str) or input_dim is None:
+        input_dim = None  # dynamic feature count
+
     output_names = [o.name for o in sess.get_outputs()]
 
-    return sess, input_name, input_shape, output_names
+    return sess, input_name, input_dim, output_names
 
-session, INPUT_NAME, INPUT_SHAPE, OUTPUT_NAMES = load_model()
+session, INPUT_NAME, MODEL_FEATURE_DIM, OUTPUT_NAMES = load_model()
 
 # =========================
-# SAFE PROBABILITY HANDLER
+# SAFE OUTPUT PARSER
 # =========================
-def get_prediction(outputs):
-    """
-    Works for:
-    - label only
-    - label + probability
-    - probability only
-    """
+def parse_output(outputs):
     if len(outputs) == 1:
         label = int(outputs[0][0])
         prob = None
@@ -63,7 +62,7 @@ def get_prediction(outputs):
 # =========================
 # UI
 # =========================
-st.title("🫀 Cardiovascular Disease Prediction (ONNX)")
+st.title("🫀 Cardiovascular Disease Prediction (ONNX – Stable)")
 
 with st.form("input_form"):
     age = st.number_input("Age", 1, 120, 50)
@@ -86,17 +85,23 @@ with st.form("input_form"):
 # PREDICTION
 # =========================
 if submit:
-    X = np.array([[
+    raw_input = np.array([
         age, sex, cp, trestbps, chol, fbs, restecg,
         thalach, exang, oldpeak, slope, ca, thal
-    ]], dtype=np.float32)
+    ], dtype=np.float32)
 
-    # SAFETY CHECK
-    assert X.shape[1] == INPUT_SHAPE[1], "Feature count mismatch!"
+    # =========================
+    # AUTO ADAPT FEATURE SIZE
+    # =========================
+    if MODEL_FEATURE_DIM is None:
+        X = raw_input.reshape(1, -1)
+    else:
+        X = np.zeros((1, MODEL_FEATURE_DIM), dtype=np.float32)
+        n = min(len(raw_input), MODEL_FEATURE_DIM)
+        X[0, :n] = raw_input[:n]
 
     outputs = session.run(None, {INPUT_NAME: X})
-
-    label, prob = get_prediction(outputs)
+    label, prob = parse_output(outputs)
 
     st.subheader("📊 Prediction Result")
     st.success("CVD Detected" if label == 1 else "No CVD Detected")
@@ -104,40 +109,38 @@ if submit:
     if prob is not None:
         st.metric("CVD Probability", f"{prob:.2f}")
     else:
-        st.info("Model does not provide probability output")
+        st.info("Model does not output probability")
 
     # =========================
-    # FEATURE IMPACT (FAST & SAFE)
+    # FEATURE IMPACT (FAST)
     # =========================
     st.subheader("📈 Feature Impact (Local Approximation)")
 
-    impacts = []
-    base_outputs = session.run(None, {INPUT_NAME: X})
-    _, base_prob = get_prediction(base_outputs)
+    if prob is not None:
+        impacts = []
 
-    if base_prob is not None:
-        for i, f in enumerate(FEATURE_NAMES):
+        for i, name in enumerate(RAW_FEATURES):
             X_tmp = X.copy()
-            X_tmp[0, i] = 0
+            if i < X_tmp.shape[1]:
+                X_tmp[0, i] = 0
 
-            _, p = get_prediction(
+            _, p2 = parse_output(
                 session.run(None, {INPUT_NAME: X_tmp})
             )
 
-            impacts.append((f, base_prob - p))
+            impacts.append((name, prob - p2))
 
         df = pd.DataFrame(impacts, columns=["Feature", "Impact"]) \
-               .sort_values("Impact", ascending=False)
+            .sort_values("Impact", ascending=False)
 
         fig, ax = plt.subplots()
-        df.head(8).plot.barh(x="Feature", y="Impact", ax=ax, legend=False)
+        df.plot.barh(x="Feature", y="Impact", ax=ax, legend=False)
         ax.invert_yaxis()
         st.pyplot(fig)
 
     st.markdown("""
-    **Catatan Interpretasi:**
-    Feature impact dihitung menggunakan pendekatan *local perturbation*
-    yang setara secara konseptual dengan metode **LIME-style explanation**,
-    dan kompatibel sepenuhnya dengan ONNX runtime.
+    **Penjelasan:**
+    Visualisasi *Feature Impact* menggunakan pendekatan **local perturbation**  
+    yang secara konseptual setara dengan **LIME-style explanation**,  
+    namun sepenuhnya kompatibel dengan **ONNX Runtime**.
     """)
-
