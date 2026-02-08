@@ -1,145 +1,209 @@
 import streamlit as st
 import numpy as np
+import onnxruntime as ort
 import matplotlib.pyplot as plt
-import joblib
+import json
+import pandas as pd
+from scipy.stats import spearmanr, kendalltau
 
-# =============================
+# =====================================================
 # LOAD MODEL
-# =============================
+# =====================================================
 @st.cache_resource
 def load_model():
-    return joblib.load("adaboost_model.onnx")  # ganti sesuai nama model kamu
+    session = ort.InferenceSession(
+        "adaboost_model.onnx",
+        providers=["CPUExecutionProvider"]
+    )
+    with open("feature_names.json") as f:
+        feature_names = json.load(f)
 
-model = load_model()
+    return (
+        session,
+        feature_names,
+        session.get_inputs()[0].name,
+        [o.name for o in session.get_outputs()]
+    )
 
-# =============================
-# FEATURE NAMES (WAJIB SAMA DENGAN TRAINING)
-# =============================
-FEATURE_NAMES = [
-    "age",
-    "sex",
-    "chest_pain_type",
-    "resting_blood_pressure",
-    "cholesterol",
-    "fasting_blood_sugar",
-    "restecg",
-    "max_heart_rate_achieved",
-    "exercise_induced_angina",
-    "st_depression",
-    "st_slope_type",
-    "num_major_vessels",
-    "thalassemia_type"
-]
+session, FEATURE_NAMES, INPUT_NAME, OUTPUT_NAMES = load_model()
 
-# =============================
-# PREDICT PROBA (AMAN LIST / ARRAY)
-# =============================
+# =====================================================
+# SAFE PREDICT PROBA
+# =====================================================
 def predict_proba(x):
-    proba = model.predict_proba(x)
+    outputs = session.run(
+        OUTPUT_NAMES,
+        {INPUT_NAME: x.astype(np.float32)}
+    )
 
-    # pastikan numpy array
-    proba = np.asarray(proba)
+    proba_raw = outputs[1]
 
-    # ambil kelas positif
-    if proba.ndim == 1:
-        return proba
-    return proba[:, 1]
+    # case: list of dict (sklearn-style ONNX)
+    if isinstance(proba_raw, list) and isinstance(proba_raw[0], dict):
+        return np.array([p[1] for p in proba_raw])
 
-# =============================
-# STREAMLIT UI
-# =============================
-st.title("❤️ Cardiovascular Disease Prediction (Single Input)")
+    proba_raw = np.array(proba_raw)
 
+    if proba_raw.ndim == 1:
+        return proba_raw
+
+    return proba_raw[:, 1]
+
+# =====================================================
+# UI
+# =====================================================
+st.set_page_config(layout="wide")
+st.title("🫀 Prediksi Penyakit Cardiovascular – Single Input + XAI")
+
+# =====================================================
+# INPUT FORM
+# =====================================================
 with st.form("input_form"):
-    age = st.number_input("Usia", 1, 120, 45)
-    sex = st.selectbox("Jenis Kelamin", ["Perempuan", "Laki-laki"])
-    sex = 1 if sex == "Laki-laki" else 0
+    st.subheader("🧾 Input Data Pasien")
 
-    chest_pain_type = st.selectbox("Chest Pain Type", [0, 1, 2, 3])
-    resting_blood_pressure = st.number_input("Tekanan Darah Istirahat", 80, 250, 120)
-    cholesterol = st.number_input("Kolesterol", 100, 600, 230)
-    fasting_blood_sugar = st.selectbox("Fasting Blood Sugar > 120", [0, 1])
+    age = st.number_input("Usia", 1, 120, 45)
+
+    sex_label = st.selectbox("Jenis Kelamin", ["Perempuan", "Laki-laki"])
+    sex = 1 if sex_label == "Laki-laki" else 0
+
+    country = st.selectbox("Dataset / Country", [0, 1, 2, 3])
+
+    cp = st.selectbox("Chest Pain Type", [0, 1, 2, 3])
+    trestbps = st.number_input("Tekanan Darah Istirahat", 80, 250, 120)
+    chol = st.number_input("Kolesterol", 100, 600, 230)
+    fbs = st.selectbox("Fasting Blood Sugar > 120", [0, 1])
     restecg = st.selectbox("Rest ECG", [0, 1, 2])
-    max_heart_rate_achieved = st.number_input("Max Heart Rate", 60, 220, 150)
-    exercise_induced_angina = st.selectbox("Exercise Induced Angina", [0, 1])
-    st_depression = st.number_input("ST Depression (Oldpeak)", 0.0, 10.0, 1.0)
-    st_slope_type = st.selectbox("ST Slope", [0, 1, 2])
-    num_major_vessels = st.selectbox("Jumlah Pembuluh Darah (CA)", [0, 1, 2, 3])
-    thalassemia_type = st.selectbox("Thal", [0, 1, 2, 3])
+    thalach = st.number_input("Max Heart Rate", 60, 220, 150)
+    exang = st.selectbox("Exercise Induced Angina", [0, 1])
+    oldpeak = st.number_input("ST Depression (Oldpeak)", 0.0, 10.0, 1.0)
+    slope = st.selectbox("Slope", [0, 1, 2])
+    ca = st.selectbox("Jumlah Pembuluh Darah (CA)", [0, 1, 2, 3])
+    thal = st.selectbox("Thal", [0, 1, 2, 3])
 
     submit = st.form_submit_button("🔍 Prediksi")
 
-# =============================
-# PROSES PREDIKSI
-# =============================
+# =====================================================
+# MAIN LOGIC
+# =====================================================
 if submit:
+
+    # =====================
+    # BUILD INPUT DICT (NAMA HARUS SAMA DENGAN MODEL)
+    # =====================
     input_dict = {
         "age": age,
         "sex": sex,
-        "chest_pain_type": chest_pain_type,
-        "resting_blood_pressure": resting_blood_pressure,
-        "cholesterol": cholesterol,
-        "fasting_blood_sugar": fasting_blood_sugar,
+        "country": country,   # ✅ FIX UTAMA
+        "cp": cp,
+        "trestbps": trestbps,
+        "chol": chol,
+        "fbs": fbs,
         "restecg": restecg,
-        "max_heart_rate_achieved": max_heart_rate_achieved,
-        "exercise_induced_angina": exercise_induced_angina,
-        "st_depression": st_depression,
-        "st_slope_type": st_slope_type,
-        "num_major_vessels": num_major_vessels,
-        "thalassemia_type": thalassemia_type
+        "thalach": thalach,
+        "exang": exang,
+        "oldpeak": oldpeak,
+        "slope": slope,
+        "ca": ca,
+        "thal": thal
     }
 
-    # susun sesuai FEATURE_NAMES
-    x_input = np.array([[input_dict[f] for f in FEATURE_NAMES]])
+    # =====================
+    # ALIGN KE FEATURE_NAMES (ANTI KeyError)
+    # =====================
+    x_input = np.array([[input_dict.get(f, 0) for f in FEATURE_NAMES]])
 
-    base_prob = float(predict_proba(x_input)[0])
-    prediction = int(base_prob >= 0.5)
+    # =====================
+    # PREDICTION
+    # =====================
+    prob = float(predict_proba(x_input)[0])
+    pred = int(prob >= 0.5)
 
-    st.subheader("📊 Hasil Prediksi")
-    st.write(f"**Probabilitas Penyakit Jantung:** {base_prob:.3f}")
-    st.success("POSITIF" if prediction == 1 else "NEGATIF")
+    st.subheader("📌 Hasil Prediksi")
+    st.metric("Probabilitas CVD", f"{prob:.4f}")
+    st.metric("Prediksi", "CVD" if pred else "No CVD")
 
     # =====================================================
-    # LIME-LIKE LOCAL FEATURE IMPORTANCE (FIXED)
+    # LIME-LIKE LOCAL EXPLANATION (PERTURBASI)
     # =====================================================
-    st.subheader("🧠 LIME-like Local Feature Importance")
+    st.subheader("🧩 LIME-like Local Explanation")
 
+    delta = 0.1
+    base_prob = prob
     lime_scores = {}
 
     for i, feat in enumerate(FEATURE_NAMES):
         x_p = x_input.copy()
-
-        # adaptive delta (KRUSIAL)
-        delta = abs(x_input[0, i]) * 0.2 if x_input[0, i] != 0 else 1
         x_p[0, i] += delta
-
-        new_prob = float(predict_proba(x_p)[0])
+        new_prob = predict_proba(x_p)[0]
         lime_scores[feat] = abs(new_prob - base_prob)
 
-    # sorting
-    lime_scores = dict(sorted(lime_scores.items(), key=lambda x: x[1]))
+    lime_df = (
+        pd.DataFrame({
+            "Feature": lime_scores.keys(),
+            "LIME_Local": lime_scores.values()
+        })
+        .sort_values("LIME_Local", ascending=False)
+    )
 
-    fig, ax = plt.subplots(figsize=(6, 4))
-    ax.barh(list(lime_scores.keys()), list(lime_scores.values()))
-    ax.set_title("LIME-like Local Feature Importance")
-    ax.set_xlabel("Importance")
-    st.pyplot(fig)
+    st.dataframe(lime_df)
+
+    fig1, ax1 = plt.subplots(figsize=(8, 6))
+    ax1.barh(lime_df["Feature"], lime_df["LIME_Local"])
+    ax1.set_title("LIME-like Local Feature Importance")
+    ax1.invert_yaxis()
+    ax1.set_facecolor("white")
+    st.pyplot(fig1)
 
     # =====================================================
-    # SHAP-LIKE GLOBAL EXPLANATION (MODEL-BASED)
+    # SHAP-LIKE GLOBAL EXPLANATION (SAMPLING)
     # =====================================================
-    st.subheader("🌍 SHAP-like Global Explanation")
+    st.subheader("📊 SHAP-like Global Explanation")
 
-    if hasattr(model, "feature_importances_"):
-        global_importance = model.feature_importances_
-    else:
-        global_importance = np.mean([
-            est.feature_importances_
-            for est in model.estimators_
-        ], axis=0)
+    n_samples = 100
+    shap_scores = {f: [] for f in FEATURE_NAMES}
 
-    fig2, ax2 = plt.subplots(figsize=(6, 4))
-    ax2.barh(FEATURE_NAMES, global_importance)
+    for _ in range(n_samples):
+        noise = np.random.normal(0, 0.1, size=x_input.shape)
+        x_s = x_input + noise
+        base = predict_proba(x_s)[0]
+
+        for i, feat in enumerate(FEATURE_NAMES):
+            x_p = x_s.copy()
+            x_p[0, i] += delta
+            new_p = predict_proba(x_p)[0]
+            shap_scores[feat].append(abs(new_p - base))
+
+    shap_df = (
+        pd.DataFrame({
+            "Feature": shap_scores.keys(),
+            "SHAP_Global": [np.mean(v) for v in shap_scores.values()]
+        })
+        .sort_values("SHAP_Global", ascending=False)
+    )
+
+    st.dataframe(shap_df)
+
+    fig2, ax2 = plt.subplots(figsize=(8, 6))
+    ax2.barh(shap_df["Feature"], shap_df["SHAP_Global"])
     ax2.set_title("SHAP-like Global Feature Importance")
+    ax2.invert_yaxis()
+    ax2.set_facecolor("white")
     st.pyplot(fig2)
 
+    # =====================================================
+    # CONSISTENCY ANALYSIS
+    # =====================================================
+    st.subheader("📐 Konsistensi SHAP-like vs LIME-like")
+
+    comp = shap_df.merge(lime_df, on="Feature")
+    comp["SHAP_Rank"] = comp["SHAP_Global"].rank(ascending=False)
+    comp["LIME_Rank"] = comp["LIME_Local"].rank(ascending=False)
+
+    rho, _ = spearmanr(comp["SHAP_Rank"], comp["LIME_Rank"])
+    tau, _ = kendalltau(comp["SHAP_Rank"], comp["LIME_Rank"])
+
+    c1, c2 = st.columns(2)
+    c1.metric("Spearman ρ", f"{rho:.3f}")
+    c2.metric("Kendall τ", f"{tau:.3f}")
+
+    st.dataframe(comp.sort_values("SHAP_Rank"))
